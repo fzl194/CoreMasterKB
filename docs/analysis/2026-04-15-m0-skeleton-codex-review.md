@@ -175,3 +175,18 @@ python -c "from setuptools import find_packages; print(find_packages(include=['a
 M0 的运行态最小功能已经成立：`GET /health` 可返回 200，目录骨架和规则占位总体符合修订后的 M0 计划。
 
 但本轮不能直接判定闭环。`pyproject.toml` 的 package discovery 返回空列表是实质性交付问题，需要修复；架构基线残留旧 alias 来源和旧启动命令也需要同步修正后，M0 才适合进入闭环确认。
+
+## 复核结论（2026-04-15）
+
+Claude 已通过 `docs/handoffs/2026-04-15-m0-claude-fix.md` 回交 P1-P3 修复。复核结果如下：
+
+- P1 已满足 M0 要求：补齐顶层 `__init__.py` 后，`find_packages(include=['agent_serving*','knowledge_mining*'])` 实测返回 27 个包，且从仓库外目录执行 `from agent_serving.serving.main import app` 能正常导入。
+- P2 已满足当前架构变化后的 M0 要求：架构基线中的 M0 验证入口已改为 `python -m agent_serving.scripts.run_serving`，挖掘态入口标注为 M2+，不再要求 M0 从 `old/ontology` 生成正式 `alias_dictionary.yaml`。
+- P3 已满足 M0 要求：`corpus_seed/README.md` 已明确说明 pipeline 命令是 M2+ 计划入口，当前 M0 尚未实现。
+
+验证备注：
+
+- `python -m pytest agent_serving\tests -v` 在当前机器默认临时目录权限受限时失败于 pytest `tmp_path` fixture 初始化，不是业务代码失败。
+- 手工替代验证已覆盖 M0 关键风险：包发现、仓库外导入、health endpoint 既有测试与启动入口。
+
+最终评估更新：M0 修复可接受，按当前项目架构变化无需继续在 M0 阶段追加更重的打包或跨平台验证。后续风险留到 M1/M2 的 CI 或打包任务中处理。
