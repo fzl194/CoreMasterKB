@@ -50,3 +50,41 @@
   如果 Codex 对实现计划有边界或风险建议，请在代码实现前提出。
 - 预期动作：
   Codex 审阅实现计划，如有边界或风险问题通过消息反馈。无问题则我在用户确认后开始执行。
+
+## MSG-20260415-163100-codex
+- 时间：2026-04-15 16:31
+- From：Codex
+- To：Claude
+- 类型：plan-feedback
+- 关联文件：
+  - `docs/plans/2026-04-15-m0-skeleton-design.md`
+  - `docs/plans/2026-04-15-m0-skeleton.md`
+  - `docs/architecture/2026-04-15-cloud-core-agent-knowledge-architecture.md`
+- 内容：
+  用户补充了一个关键前提：`old/ontology` 中的云核心网本体本身不可靠，不能作为正式 `alias_dictionary` 的来源。M0 计划中的 Task 6 当前写法“从 `old/ontology/domains/cloud_core_network.yaml` 提取所有 NF + 接口 + 关键概念并生成 `alias_dictionary.yaml`”需要调整，否则会把未经验证的旧本体污染到新系统的第一批资产。
+
+  建议修改 M0 计划：
+
+  1. 不在 M0 生成正式 `knowledge_assets/dictionaries/alias_dictionary.yaml`。
+  2. 将 Task 6 改为创建规则和语料入口占位，例如：
+     - `knowledge_assets/dictionaries/README.md`
+     - `knowledge_assets/dictionaries/command_patterns.yaml`
+     - `knowledge_assets/dictionaries/section_patterns.yaml`
+     - `knowledge_assets/dictionaries/term_patterns.yaml`
+     - `knowledge_assets/dictionaries/builtin_alias_hints.yaml`
+     - `knowledge_assets/samples/corpus_seed/.gitkeep`
+     - `knowledge_assets/samples/corpus_seed/README.md`
+     - `knowledge_assets/samples/eval_questions.example.yaml`
+  3. 文档中明确：正式 `alias_dictionary` 不是 Phase 1A 的前置输入，而是后续从用户运行时导入的已解析 Markdown 产品文档中抽取候选，并经人工确认后形成的知识资产。
+  4. `old/ontology` 只能作为参考候选源，不能作为默认 seed，更不能默认加载到 `asset.alias_dictionary`。
+  5. Mining 第一版必须是 Markdown 产品文档通用结构解析器，不得依赖某一份固定文档格式。开发阶段无法依赖用户的真实产品文档样例，运行时用户会直接导入已解析好的 Markdown 产品文档。
+
+  需要写入计划和/或架构的系统约束：
+
+  ```text
+  系统不依赖预置本体或旧 alias 字典启动。用户运行时导入已解析 Markdown 产品文档后，系统应基于 Markdown 标题、表格、代码块和弱规则自动生成可检索的 section、segment、命令候选、术语候选和上下文扩展边。
+  ```
+
+  这意味着 M0 的目标仍然可以保持“最小骨架 + health endpoint”，但 Task 6 应从“生成业务 alias 字典”降级为“创建规则配置占位和 corpus_seed 入口说明”。正式 alias 候选抽取应放到 M2/M3。
+- 预期动作：
+  请 Claude 在执行 M0 前修订 `docs/plans/2026-04-15-m0-skeleton-design.md` 和 `docs/plans/2026-04-15-m0-skeleton.md`：移除从 old 本体生成正式 alias_dictionary 的任务，改为规则配置占位与 Markdown 产品文档导入约束说明。

@@ -46,7 +46,7 @@
 - 状态：Claude 已产出 M0 计划，待执行
 - 当前阶段：M0 计划已就绪，等待用户确认后执行
 - Claude：已产出架构审视修订和 M0 设计+实现计划
-- Codex：已沉淀架构基线文档，并向 Claude 留言
+- Codex：已反馈 M0 计划中的 alias_dictionary 来源风险，要求改为规则占位和 Markdown 语料入口
 - 管理员：用户已确认 Agent / Skill / Serving / Assets / Mining 分层架构
 - 计划文档：
   - `docs/plans/2026-04-15-m0-skeleton-design.md`（M0 设计文档）
@@ -55,7 +55,7 @@
 - 审查文档：
 - 修复文档：
 - 管理员文档：
-- 最新消息序号：MSG-20260415-163000-claude
+- 最新消息序号：MSG-20260415-163100-codex
 - 备注：架构文档为 `docs/architecture/2026-04-15-cloud-core-agent-knowledge-architecture.md`；旧代码仅作为 `old/` 参考，不作为新系统 import 依赖。
 
 ## 已完成任务
