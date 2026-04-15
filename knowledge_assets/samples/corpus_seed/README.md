@@ -6,6 +6,8 @@
 
 将已解析为 Markdown 格式的云核心网产品文档放入此目录，然后运行挖掘态 pipeline：
 
+> **注意：** 以下命令为 M2+ 计划入口，当前 M0 尚未实现 `knowledge_mining.mining.jobs.run` 模块。
+
 ```bash
 python -m knowledge_mining.mining.jobs.run --input knowledge_assets/samples/corpus_seed/
 ```
