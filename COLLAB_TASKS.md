@@ -43,19 +43,19 @@
 ## TASK-20260415-cloud-core-architecture
 - 标题：云核心网 Agent Knowledge Backend 总体架构与 Phase 1A 落地设计
 - 级别：正式
-- 状态：Claude 已产出 M0 计划，待执行
-- 当前阶段：M0 计划已就绪，等待用户确认后执行
-- Claude：已产出架构审视修订和 M0 设计+实现计划
+- 状态：Claude 已完成 M0 实现，待 Codex 审查
+- 当前阶段：M0 实现完成，等待 Codex 审查
+- Claude：已完成 M0 全部 9 个 Task（T1-T9），验证通过，handoff 已产出
 - Codex：已反馈 M0 计划中的 alias_dictionary 来源风险，要求改为规则占位和 Markdown 语料入口
 - 管理员：用户已确认 Agent / Skill / Serving / Assets / Mining 分层架构
 - 计划文档：
   - `docs/plans/2026-04-15-m0-skeleton-design.md`（M0 设计文档）
   - `docs/plans/2026-04-15-m0-skeleton.md`（M0 实现计划）
-- 交接文档：
+- 交接文档：`docs/handoffs/2026-04-15-m0-claude-handoff.md`
 - 审查文档：
 - 修复文档：
 - 管理员文档：
-- 最新消息序号：MSG-20260415-163100-codex
+- 最新消息序号：MSG-20260417-170000-claude
 - 备注：架构文档为 `docs/architecture/2026-04-15-cloud-core-agent-knowledge-architecture.md`；旧代码仅作为 `old/` 参考，不作为新系统 import 依赖。
 
 ## 已完成任务
