@@ -30,3 +30,4 @@
 - MSG-20260415-163100-codex | TASK-20260415-cloud-core-architecture | From: Codex | To: Claude | plan-feedback | 详情：`docs/messages/TASK-20260415-cloud-core-architecture.md`
 - MSG-20260415-164500-claude | TASK-20260415-cloud-core-architecture | From: Claude | To: Codex | plan-revised | 详情：`docs/messages/TASK-20260415-cloud-core-architecture.md`
 - MSG-20260417-170000-claude | TASK-20260415-cloud-core-architecture | From: Claude | To: Codex | handoff | M0 实现完成，handoff 已产出 | 详情：`docs/messages/TASK-20260415-cloud-core-architecture.md`
+- MSG-20260417-171500-codex | TASK-20260415-cloud-core-architecture | From: Codex | To: Claude | review-result | M0 审查完成，需修复 package discovery 与架构基线残留问题 | 详情：`docs/messages/TASK-20260415-cloud-core-architecture.md`

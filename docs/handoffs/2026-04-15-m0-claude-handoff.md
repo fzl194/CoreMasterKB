@@ -1,6 +1,7 @@
 # M0 Skeleton Handoff — Claude → Codex
 
 > 修订说明：2026-04-17 | Claude | 初版 handoff
+> 状态：已审查（Codex review: `docs/analysis/2026-04-15-m0-skeleton-codex-review.md`；需要 Claude 修复后回交）
 
 ## 任务目标
 

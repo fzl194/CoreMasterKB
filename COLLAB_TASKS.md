@@ -46,16 +46,16 @@
 - 状态：Claude 已完成 M0 实现，待 Codex 审查
 - 当前阶段：M0 实现完成，等待 Codex 审查
 - Claude：已完成 M0 全部 9 个 Task（T1-T9），验证通过，handoff 已产出
-- Codex：已反馈 M0 计划中的 alias_dictionary 来源风险，要求改为规则占位和 Markdown 语料入口
+- Codex：已完成 M0 审查，发现 package discovery 为空和架构基线残留旧 M0 说明，需 Claude 修复后回交
 - 管理员：用户已确认 Agent / Skill / Serving / Assets / Mining 分层架构
 - 计划文档：
   - `docs/plans/2026-04-15-m0-skeleton-design.md`（M0 设计文档）
   - `docs/plans/2026-04-15-m0-skeleton.md`（M0 实现计划）
 - 交接文档：`docs/handoffs/2026-04-15-m0-claude-handoff.md`
-- 审查文档：
+- 审查文档：`docs/analysis/2026-04-15-m0-skeleton-codex-review.md`
 - 修复文档：
 - 管理员文档：
-- 最新消息序号：MSG-20260417-170000-claude
+- 最新消息序号：MSG-20260417-171500-codex
 - 备注：架构文档为 `docs/architecture/2026-04-15-cloud-core-agent-knowledge-architecture.md`；旧代码仅作为 `old/` 参考，不作为新系统 import 依赖。
 
 ## 已完成任务
