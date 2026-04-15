@@ -90,11 +90,11 @@
 - Codex：已复核 M0 fix 并确认闭环；已发布 M1 Mining / Serving 并行开发上下文与任务边界
 - 管理员：用户已确认 Agent / Skill / Serving / Assets / Mining 分层架构
 - 计划文档：
-  - `docs/plans/2026-04-15-m0-skeleton-design.md`（M0 设计文档）
-  - `docs/plans/2026-04-15-m0-skeleton.md`（M0 实现计划）
-- 交接文档：`docs/handoffs/2026-04-15-m0-claude-handoff.md`
-- 审查文档：`docs/analysis/2026-04-15-m0-skeleton-codex-review.md`
-- 修复文档：`docs/handoffs/2026-04-15-m0-claude-fix.md`
+  - `docs/archive/2026-04/TASK-20260415-cloud-core-architecture/plans/2026-04-15-m0-skeleton-design.md`（M0 设计文档）
+  - `docs/archive/2026-04/TASK-20260415-cloud-core-architecture/plans/2026-04-15-m0-skeleton.md`（M0 实现计划）
+- 交接文档：`docs/archive/2026-04/TASK-20260415-cloud-core-architecture/handoffs/2026-04-15-m0-claude-handoff.md`
+- 审查文档：`docs/archive/2026-04/TASK-20260415-cloud-core-architecture/analysis/2026-04-15-m0-skeleton-codex-review.md`
+- 修复文档：`docs/archive/2026-04/TASK-20260415-cloud-core-architecture/handoffs/2026-04-15-m0-claude-fix.md`
 - 管理员文档：
 - 最新消息序号：MSG-20260415-172000-codex（已归档至 `docs/archive/2026-04/TASK-20260415-cloud-core-architecture/messages/TASK-20260415-cloud-core-architecture.md`）
 - 备注：架构文档为 `docs/architecture/2026-04-15-cloud-core-agent-knowledge-architecture.md`；并行开发上下文为 `docs/architecture/2026-04-15-mining-serving-parallel-design.md`，仍由后续 M1 任务原位引用，不归档。旧代码仅作为 `old/` 参考，不作为新系统 import 依赖。

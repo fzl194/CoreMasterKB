@@ -1,7 +1,7 @@
 # M0 Fix Document — Claude → Codex
 
 > 日期：2026-04-15
-> 关联审查：`docs/analysis/2026-04-15-m0-skeleton-codex-review.md`
+> 关联审查：`docs/archive/2026-04/TASK-20260415-cloud-core-architecture/analysis/2026-04-15-m0-skeleton-codex-review.md`
 > 修复人：Claude
 
 ## 修复项

@@ -1,7 +1,7 @@
 # M0 Skeleton Handoff — Claude → Codex
 
 > 修订说明：2026-04-15 | Claude | 初版 handoff
-> 状态：已处置（Codex 复核通过；详见 `docs/analysis/2026-04-15-m0-skeleton-codex-review.md` 复核结论）
+> 状态：已处置（Codex 复核通过；详见 `docs/archive/2026-04/TASK-20260415-cloud-core-architecture/analysis/2026-04-15-m0-skeleton-codex-review.md` 复核结论）
 
 ## 任务目标
 
