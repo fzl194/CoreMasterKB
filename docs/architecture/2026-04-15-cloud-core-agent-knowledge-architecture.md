@@ -1,7 +1,7 @@
 # 云核心网 Agent Knowledge Backend 总体架构设计
 
-> **版本**: v0.4 (2026-04-15)
-> **审阅**: Codex 初稿 → Claude 审视修订 → Codex 边界校正 → Codex alias_dictionary 风险修正
+> **版本**: v0.5 (2026-04-15)
+> **审阅**: Codex 初稿 → Claude 审视修订 → Codex 边界校正 → Codex alias_dictionary 风险修正 → Codex 挖掘态/使用态并行开发拆分
 
 ## 1. 文档目的
 
@@ -19,6 +19,13 @@
 | 2026-04-15 | Claude | 审视修订：单 pyproject.toml、补充 Query Normalizer、合并里程碑、补充 dev mode、answer_materials 子结构、alias_dictionary 来源、schema 治理权 |
 | 2026-04-15 | Codex  | 边界校正：修正 dev SQLite 共享问题、统一运行入口、补充根目录 scripts、修正 alias_dictionary 来源、细化 M3 子任务 |
 | 2026-04-15 | Codex  | alias_dictionary 风险修正：old/ontology 不可靠，不作为正式 alias 来源；M0 改为规则占位；正式 alias 从用户导入的 Markdown 文档中抽取 |
+| 2026-04-15 | Codex  | 明确 Knowledge Mining 与 Agent Serving 独立开发，以数据库知识资产为唯一桥梁；新增 L0/L1/L2 资产分层与并行任务边界 |
+
+本轮并行开发上下文详见：
+
+```text
+docs/architecture/2026-04-15-mining-serving-parallel-design.md
+```
 
 ## 2. 核心共识
 
@@ -142,8 +149,9 @@ publish_versions
 documents
 document_profiles
 sections
-segments
-segment_annotations
+raw_segments
+canonical_segments
+canonical_segment_sources
 commands
 command_aliases
 command_segment_links
@@ -159,6 +167,17 @@ quality_reports
 - 默认读取 `status = active` 的版本。
 - 挖掘态不得直接覆盖线上 active 资产。
 - 新资产先进入 staging，通过质量检查后再激活。
+- 运行态默认检索 `canonical_segments`，只在需要产品/版本/网元下钻时通过 `canonical_segment_sources` 读取 `raw_segments`。
+
+阶段 1A 的语料资产分为三层：
+
+| 层级 | 中文名称 | 核心含义 | 默认是否检索 |
+| --- | --- | --- | --- |
+| L0 | 原始语料层 | 从 Markdown 产品文档中解析出来的原始段落，保留产品、版本、网元、章节、原文 | 否 |
+| L1 | 归并语料层 | 对 L0 原始段落去重、聚类、归并后形成的检索主对象 | 是 |
+| L2 | 来源映射与差异层 | 记录 L1 由哪些 L0 构成，以及是否存在产品、版本、网元、内容差异 | 否 |
+
+L2 不命名为 evidence。旧项目中的 evidence 服务于本体 fact，本阶段 L2 服务于 `canonical_segment -> raw_segment` 的来源映射与差异选择。
 
 ### 3.5 Knowledge Mining / 挖掘态服务
 
@@ -520,9 +539,7 @@ old/static/*
 
 ## 10. 里程碑
 
-> **Claude 审视修订**: 原始 M2-M4 拆分过细（文档→命令→边+embedding 高度耦合，中间产物不可独立测试）。合并为 M2 和 M3 两个里程碑，每个都有明确的可验证产出。
-
-Claude Code 后续计划建议按以下里程碑展开。
+Claude Code 后续计划建议按以下里程碑展开。M0 之后拆分为知识挖掘态与 Agent 服务使用态两条线。两条线可以并行开发，但必须以 `knowledge_assets/schemas/` 和契约文档作为唯一桥梁。
 
 ### M0 项目骨架
 
@@ -532,32 +549,37 @@ Claude Code 后续计划建议按以下里程碑展开。
 - 创建规则配置占位（command_patterns.yaml、section_patterns.yaml、term_patterns.yaml、builtin_alias_hints.yaml）和 Markdown 语料入口（corpus_seed/）。不生成正式 alias_dictionary。
 - **验证**: `python -m agent_serving.scripts.run_serving` 能启动，`curl /health` 返回 200。
 
-### M1 资产表结构
+### M1A Knowledge Mining / 知识挖掘态
 
-- 创建 `asset.*` / `mining.*` / `serving.*` schema。
-- 包含 publish_versions、documents、document_profiles、sections、segments、segment_annotations、commands、command_aliases、command_segment_links、segment_edges、segment_embeddings、alias_dictionary、quality_reports。
-- 独立脚本 `scripts/init_db.py` 统一执行。
-- **验证**: `psql` 中能查到所有表，schema 隔离正确。
+- 独立任务 ID：`TASK-20260415-m1-knowledge-mining`。
+- 只负责离线生产知识资产。
+- 支持 Markdown 产品文档解析，生成 L0 原始语料层。
+- 基于 hash / normalized hash / simhash + jaccard 生成 L1 归并语料层。
+- 生成 L2 来源映射与差异层，表达 exact_duplicate / near_duplicate / version_variant / product_variant / ne_variant / conflict_candidate。
+- 写入 staging publish version。
+- 不做 FastAPI、Agent Skill、在线检索、context pack。
+- 提交信息使用 `[claude-mining]: ...`。
 
-### M2 文档导入与段落切分
+### M1B Agent Serving / 知识使用态
 
-- 支持 Markdown/TXT/HTML 导入。
-- 文档画像识别（doc_type, vendor, product, version）。
-- 章节结构恢复 → section tree。
-- segment 切分（保留命令/参数/示例完整性，不按固定 token 硬切）。
-- segment 轻量标注（segment_type + signal flags）。
-- 写入 asset staging。
-- **验证**: 输入一份云核心网命令手册 MD，能生成完整的 section + segment + annotation，segment_type 包含 command_def / parameter_block / example_block 等。
+- 独立任务 ID：`TASK-20260415-m1-agent-serving`。
+- 只负责在线消费已发布知识资产。
+- 读取 active publish version。
+- 默认检索 L1 `canonical_segments`。
+- 当 `has_variants = true` 或用户给出产品/版本/网元约束时，通过 L2 下钻 L0。
+- 输出 Agent 可用的 context pack、uncertainties、suggested_followups。
+- 不做 Markdown 解析、文档导入、去重归并、写入 asset 表。
+- 提交信息使用 `[claude-serving]: ...`。
 
-### M3 命令索引与上下文扩展
+### M2 命令索引与上下文扩展
 
-- M3.1 命令入口索引：识别 `ADD/MOD/DEL/SET/SHOW/LST/DSP` 等命令 → commands + command_aliases + command_segment_links。
-- M3.2 上下文扩展边：生成 segment_edges（prev_next, same_section, command_to_parameter, command_to_example, command_to_note, command_to_condition）。
-- M3.3 向量资产：批量生成 segment embedding。
-- M3.4 发布门控：质量门控检查（命令抽取命中率 > 80%，空 segment < 2%），通过后激活发布版本。
+- 命令入口索引：识别 `ADD/MOD/DEL/SET/SHOW/LST/DSP` 等命令 → commands + command_aliases + command_segment_links。
+- 上下文扩展边：生成 segment_edges（prev_next, same_section, command_to_parameter, command_to_example, command_to_note, command_to_condition）。
+- 向量资产：批量生成 segment embedding。
+- 发布门控：质量门控检查（命令抽取命中率 > 80%，空 segment < 2%），通过后激活发布版本。
 - **验证**: 给定命令名 `ADD APN`，能通过 command_segment_links 找到其参数段、示例段、注意事项段，并通过 segment_edges 扩展上下文。
 
-### M4 Serving 检索引擎
+### M3 Serving 检索引擎
 
 - exact command retriever。
 - title retriever。
@@ -568,15 +590,15 @@ Claude Code 后续计划建议按以下里程碑展开。
 - command reranker（按命令类排序函数）。
 - **验证**: `/debug/retrieve` 接口能展示多路召回结果和排序分数。
 
-### M5 Context Pack 与业务 API
+### M4 Context Pack 与业务 API
 
 - `POST /api/v1/command/usage` 输出稳定 context pack。
 - `POST /api/v1/search` 通用兜底检索。
 - `POST /api/v1/context/assemble` 二次组装。
-- 实现 evidence builder、uncertainties、suggested_followups。
-- **验证**: 给定 `ADD APN 命令怎么写`，返回完整的 context pack，包含 command_candidates、parameters、examples、notes、evidence、uncertainties。
+- 实现 sources、uncertainties、suggested_followups。
+- **验证**: 给定 `ADD APN 命令怎么写`，返回完整的 context pack，包含 command_candidates、parameters、examples、notes、sources、uncertainties。
 
-### M6 Skill 初版
+### M5 Skill 初版
 
 - `skills/cloud_core_knowledge/SKILL.md`。
 - 工具定义（get_command_usage, search_cloud_core_knowledge, assemble_cloud_core_context）。
@@ -586,10 +608,10 @@ Claude Code 后续计划建议按以下里程碑展开。
 - 示例问题。
 - **验证**: Skill 文档可被 Agent 框架加载并正确路由工具调用。
 
-### M7 评测闭环
+### M6 评测闭环
 
 - 准备 30-50 个真实问题（`knowledge_assets/samples/eval_questions.yaml`）。
-- 评估命令召回率、证据覆盖率、context pack 完整性。
+- 评估命令召回率、来源覆盖率、context pack 完整性。
 - 根据评测结果调优 reranker 权重和扩展策略。
 - **验证**: 核心命令类问题召回率 > 80%，context pack 关键字段非空率 > 90%。
 
@@ -624,12 +646,14 @@ Claude Code 后续计划建议按以下里程碑展开。
 
 - 不要把 mining pipeline 和 serving API 混在同一个运行服务里。
 - 不要让 serving import mining。
+- 不要让 mining import serving。
 - 不要把旧项目完整复制回来。
 - 不要第一阶段引入完整 ontology / facts / Neo4j。
 - 不要把 Skill 写成重型检索系统。
 - 不要先做 PDF/Word 复杂解析而阻塞命令问答闭环。
 - 不要返回裸搜索结果给 Agent，必须稳定 context pack。
 - 不要让 mining 和 serving 各自定义 schema，schema 定义权归 `knowledge_assets/schemas/`。
+- 不要在并行任务中跨范围修改代码：Mining 任务不改 `agent_serving/**`，Serving 任务不改 `knowledge_mining/**`。
 
 ## 13. 当前有效决策
 
@@ -645,3 +669,6 @@ Claude Code 后续计划建议按以下里程碑展开。
 - alias_dictionary 不从 `old/ontology` 生成。系统不依赖预置本体启动，正式 alias 从用户导入的 Markdown 产品文档中抽取（M2/M3）。M0 只创建规则配置占位。
 - 支持 dev 模式（文件 SQLite + 内存向量索引），降低开发环境依赖。
 - 评测集存放在 `knowledge_assets/samples/eval_questions.yaml`。
+- M0 之后拆分为 `TASK-20260415-m1-knowledge-mining` 与 `TASK-20260415-m1-agent-serving` 两个可并行任务。
+- Mining 与 Serving 通过数据库知识资产契约对接，代码不得互相 import。
+- 后续 Claude 提交必须区分工作范围：挖掘态使用 `[claude-mining]: ...`，使用态使用 `[claude-serving]: ...`。

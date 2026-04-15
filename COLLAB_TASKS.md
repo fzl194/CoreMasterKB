@@ -43,10 +43,10 @@
 ## TASK-20260415-cloud-core-architecture
 - 标题：云核心网 Agent Knowledge Backend 总体架构与 Phase 1A 落地设计
 - 级别：正式
-- 状态：Claude 已完成 M0 实现，待 Codex 审查
-- 当前阶段：M0 实现完成，等待 Codex 审查
+- 状态：M0 修复已回交待 Codex 复核；M1 已拆分为两个可并行任务
+- 当前阶段：M0 修复复核待办；M1 Mining / Serving 任务已发布
 - Claude：已完成 M0 全部 9 个 Task（T1-T9），验证通过，handoff 已产出
-- Codex：已完成 M0 审查，发现 package discovery 为空和架构基线残留旧 M0 说明，需 Claude 修复后回交
+- Codex：已完成 M0 审查；已发布 M1 Mining / Serving 并行开发上下文与任务边界
 - 管理员：用户已确认 Agent / Skill / Serving / Assets / Mining 分层架构
 - 计划文档：
   - `docs/plans/2026-04-15-m0-skeleton-design.md`（M0 设计文档）
@@ -55,8 +55,42 @@
 - 审查文档：`docs/analysis/2026-04-15-m0-skeleton-codex-review.md`
 - 修复文档：`docs/handoffs/2026-04-15-m0-claude-fix.md`
 - 管理员文档：
-- 最新消息序号：MSG-20260415-165500-codex
-- 备注：架构文档为 `docs/architecture/2026-04-15-cloud-core-agent-knowledge-architecture.md`；旧代码仅作为 `old/` 参考，不作为新系统 import 依赖。
+- 最新消息序号：MSG-20260415-171100-codex
+- 备注：架构文档为 `docs/architecture/2026-04-15-cloud-core-agent-knowledge-architecture.md`；并行开发上下文为 `docs/architecture/2026-04-15-mining-serving-parallel-design.md`；旧代码仅作为 `old/` 参考，不作为新系统 import 依赖。
+
+## TASK-20260415-m1-knowledge-mining
+- 标题：M1 Knowledge Mining / 原始语料与归并语料生产
+- 级别：正式
+- 状态：已发布，待 Claude Mining 制定计划
+- 当前阶段：任务简报已发布
+- Claude：负责 `knowledge_mining/**`，提交前缀 `[claude-mining]:`
+- Codex：已定义任务边界、资产三层模型与禁止修改范围
+- 管理员：用户要求该任务与 Agent Serving 任务独立并行开发
+- 计划文档：
+- 交接文档：
+- 审查文档：
+- 修复文档：
+- 管理员文档：
+  - `docs/architecture/2026-04-15-mining-serving-parallel-design.md`
+- 最新消息序号：MSG-20260415-171000-codex
+- 备注：本任务禁止修改 `agent_serving/**` 与 `skills/cloud_core_knowledge/**`；如需改共享 schema，必须先在消息中说明兼容性影响。
+
+## TASK-20260415-m1-agent-serving
+- 标题：M1 Agent Serving / 归并语料检索与差异下钻
+- 级别：正式
+- 状态：已发布，待 Claude Serving 制定计划
+- 当前阶段：任务简报已发布
+- Claude：负责 `agent_serving/**` 与 `skills/cloud_core_knowledge/**`，提交前缀 `[claude-serving]:`
+- Codex：已定义任务边界、运行态只读约束与禁止修改范围
+- 管理员：用户要求该任务与 Knowledge Mining 任务独立并行开发
+- 计划文档：
+- 交接文档：
+- 审查文档：
+- 修复文档：
+- 管理员文档：
+  - `docs/architecture/2026-04-15-mining-serving-parallel-design.md`
+- 最新消息序号：MSG-20260415-171100-codex
+- 备注：本任务禁止修改 `knowledge_mining/**` 与 `knowledge_assets/dictionaries/**`；如需改共享 schema，必须先在消息中说明兼容性影响。
 
 ## 已完成任务
 
