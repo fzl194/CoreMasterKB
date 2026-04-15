@@ -26,3 +26,4 @@
 
 - 暂无
 - MSG-20260415-145000-codex | TASK-20260415-cloud-core-architecture | From: Codex | To: Claude | architecture-handoff | 详情：`docs/messages/TASK-20260415-cloud-core-architecture.md`
+- MSG-20260415-163000-claude | TASK-20260415-cloud-core-architecture | From: Claude | To: Codex | plan-ready | 详情：`docs/messages/TASK-20260415-cloud-core-architecture.md`
