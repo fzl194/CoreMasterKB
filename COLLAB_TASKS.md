@@ -73,7 +73,7 @@
 - 修复文档：
 - 管理员文档：
   - `docs/architecture/2026-04-15-mining-serving-parallel-design.md`
-- 最新消息序号：MSG-20260416-171500-codex
+- 最新消息序号：MSG-20260416-190100-codex
 - 备注：本任务禁止修改 `knowledge_mining/**` 与 `knowledge_assets/dictionaries/**`；如需改共享 schema，必须先在消息中说明兼容性影响。
 
 ## 已完成任务
