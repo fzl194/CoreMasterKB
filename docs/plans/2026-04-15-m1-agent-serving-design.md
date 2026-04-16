@@ -1,10 +1,10 @@
 # M1 Agent Serving 设计文档
 
-> 版本: v1.0
-> 日期: 2026-04-15
+> 版本: v1.1（实现后同步）
+> 日期: 2026-04-15 / 更新: 2026-04-17
 > 作者: Claude Serving
 > 任务: TASK-20260415-m1-agent-serving
-> 状态: 待 Codex 审查
+> 状态: 已实现，39/39 测试通过
 
 ## 1. 任务目标
 
@@ -46,7 +46,6 @@ FastAPI API 层 (api/)
   ↓
 Application 层 (application/)
   ├── QueryNormalizer   — 解析查询约束
-  ├── SearchPlanner     — 决定检索策略
   └── ContextAssembler  — 组装 context pack
   ↓
 Repository 层 (repositories/)
@@ -61,21 +60,22 @@ SQLite (dev) / PostgreSQL (prod)
 | 文件 | 职责 |
 |------|------|
 | `agent_serving/serving/repositories/asset_repo.py` | 只读 asset 表 |
-| `agent_serving/serving/repositories/log_repo.py` | 写入 serving.retrieval_logs |
+| `agent_serving/serving/repositories/schema_adapter.py` | PG DDL → SQLite DDL 转换 |
 | `agent_serving/serving/application/normalizer.py` | 查询约束识别 |
-| `agent_serving/serving/application/planner.py` | 检索计划生成 |
 | `agent_serving/serving/application/assembler.py` | context pack 组装 |
 | `agent_serving/serving/schemas/models.py` | Pydantic request/response |
-| `agent_serving/serving/api/search.py` | `POST /api/v1/search` |
-| `agent_serving/serving/api/command_usage.py` | `POST /api/v1/command/usage` |
-| `agent_serving/serving/api/context_assemble.py` | `POST /api/v1/context/assemble` |
-| `agent_serving/serving/main.py` | FastAPI app，注册路由 |
-| `knowledge_assets/schemas/init_serving.sql` | serving schema |
-| `agent_serving/tests/conftest.py` | 测试 fixture |
+| `agent_serving/serving/api/search.py` | `POST /api/v1/search` + `POST /api/v1/command-usage` |
+| `agent_serving/serving/api/health.py` | `GET /health` |
+| `agent_serving/serving/main.py` | FastAPI app，lifespan DB 初始化 |
+| `agent_serving/tests/conftest.py` | 测试 fixture（参数化 seed data） |
 | `agent_serving/tests/test_normalizer.py` | Normalizer 测试 |
 | `agent_serving/tests/test_asset_repo.py` | Repository 测试 |
-| `agent_serving/tests/test_search_api.py` | 搜索 API 集成测试 |
-| `agent_serving/tests/test_command_usage_api.py` | 命令查询 API 测试 |
+| `agent_serving/tests/test_assembler.py` | Assembler 测试（conflict 处理） |
+| `agent_serving/tests/test_schema_adapter.py` | Schema 转换测试 |
+| `agent_serving/tests/test_models.py` | 模型序列化测试 |
+| `agent_serving/tests/test_api_integration.py` | API 集成测试 |
+
+> **M2+ 计划**：`planner.py`（检索策略规划）和 `context_assemble.py`（独立上下文组装端点）推迟到 M2。M1 中 Normalizer 直接驱动 search + drill_down，Assembler 直接组装 pack。
 
 ## 5. 数据流
 
@@ -135,23 +135,19 @@ M1 使用硬编码规则：
 ```text
 {
   query: str,
-  intent: str,
+  intent: str,                     // "command_usage" | "general_query"
   normalized_query: str,
-  key_objects: {command, product, product_version, network_element},
-  answer_materials: {
-    canonical_segments: [...],
-    raw_segments: [...],          // 下钻后
-    command_candidates: [...],
-    parameters: [...],
-    examples: [...],
-    notes: [...],
-    preconditions: [...],
-    applicability: {product, version, ne}
+  key_objects: {
+    command, product, product_version, network_element
   },
-  sources: [{document_key, section_path, segment_type}],
+  answer_materials: {
+    canonical_segments: [{id, segment_type, title, canonical_text, command_name, has_variants, variant_policy}],
+    raw_segments: [{id, segment_type, raw_text, command_name, section_path, section_title}]
+  },
+  sources: [{document_key, section_path, segment_type, product, product_version, network_element}],
   uncertainties: [{field, reason, suggested_options}],
   suggested_followups: [str],
-  debug_trace: {...}             // 仅 debug 模式
+  debug_trace: {...}               // 仅 debug 模式
 }
 ```
 
