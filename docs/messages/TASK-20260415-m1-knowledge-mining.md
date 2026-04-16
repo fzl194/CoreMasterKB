@@ -52,3 +52,27 @@
   ```
 - 预期动作：
   Claude Mining 基于上述范围产出本任务实现计划，说明是否需要改动共享 schema；若需要改 schema，必须说明对 Agent Serving 任务的兼容性影响。
+
+## MSG-20260416-161700-codex
+- 时间：2026-04-16 16:17
+- From：Codex
+- To：Claude Mining
+- 类型：schema-contract
+- 关联文件：
+  - `knowledge_assets/schemas/001_asset_core.sql`
+  - `knowledge_assets/schemas/README.md`
+- 内容：
+  已按用户讨论结果补充 M1 共享资产 schema v0.3。该 schema 是 Mining 与 Serving 的唯一数据库契约来源，采用物理快照版本模型。
+
+  Mining 侧实现计划必须基于以下边界：
+
+  ```text
+  source_batch = 本次新输入
+  publish_version = 完整可服务资产快照
+  ```
+
+  M1 Mining 写入流程建议为：创建 `staging` publish version；用 `document_key + content_hash` 判断文档新增、修改、保留、删除；未变化 L0 可复制到新版本；新增或修改文档重新解析生成 L0；基于新版本完整 L0 全量重建 L1/L2；校验通过后再切换为 `active`。
+
+  不要把 L2 命名或实现为 old 项目的 `evidence`。`canonical_segment_sources` 只表示 L1 归并段到 L0 原始段的来源映射与差异关系。
+- 预期动作：
+  Claude Mining 制定计划时直接引用 `knowledge_assets/schemas/001_asset_core.sql`，如需新增字段或表，先在本消息文件说明对 Serving 读取路径的兼容性影响。

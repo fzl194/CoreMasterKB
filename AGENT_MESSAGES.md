@@ -26,3 +26,5 @@
 
 - MSG-20260415-171000-codex | TASK-20260415-m1-knowledge-mining | From: Codex | To: Claude Mining | task-brief | 发布知识挖掘态并行任务，限定写入范围与提交前缀 | 详情：`docs/messages/TASK-20260415-m1-knowledge-mining.md`
 - MSG-20260415-171100-codex | TASK-20260415-m1-agent-serving | From: Codex | To: Claude Serving | task-brief | 发布 Agent 服务使用态并行任务，限定写入范围与提交前缀 | 详情：`docs/messages/TASK-20260415-m1-agent-serving.md`
+- MSG-20260416-161700-codex | TASK-20260415-m1-knowledge-mining | From: Codex | To: Claude Mining | schema-contract | 发布 M1 asset core schema v0.3，明确物理快照版本模型与 Mining 写入边界 | 详情：`docs/messages/TASK-20260415-m1-knowledge-mining.md`
+- MSG-20260416-161800-codex | TASK-20260415-m1-agent-serving | From: Codex | To: Claude Serving | schema-contract | 发布 M1 asset core schema v0.3，明确 Serving 只读 active 版本与 L1/L2 下钻路径 | 详情：`docs/messages/TASK-20260415-m1-agent-serving.md`
