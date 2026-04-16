@@ -1,30 +1,33 @@
 # M1 Knowledge Mining Design
 
-> 版本: v1.0
+> 版本: v1.1
 > 日期: 2026-04-16
 > 作者: Claude Mining
 > 任务: TASK-20260415-m1-knowledge-mining
+> 修订说明: 基于 Codex 审查 P1-P2 修订；对齐 schema v0.4；纳入上游转换器与 manifest.jsonl；拆分 block_type/section_role；SQLite 读取共享 DDL
 
 ## 1. 目标
 
 实现离线知识挖掘最小闭环：
 
 ```
-Markdown 产品文档 → L0 raw_segments → L1 canonical_segments → L2 canonical_segment_sources
+上游转换后 Markdown / source artifacts → L0 raw_segments → L1 canonical_segments → L2 canonical_segment_sources
 ```
 
 写入 staging publish version，供 Agent Serving 读取 active 版本使用。
 
+输入不限于产品文档，也支持专家文档、项目文档、培训材料等。产品/版本/网元仅为可选 scope facet。
+
 ## 2. 核心流程
 
 ```
-Markdown 文件
-  → Ingestion（文件读取、frontmatter 解析）
-  → Document Profile（识别 product/version/network_element/doc_type）
-  → Structure Parse（Markdown AST：标题/表格/代码块/列表/段落）
-  → Segmentation（AST → L0 segments，计算 hash/normalize/simhash）
+输入目录（带 manifest.jsonl 或纯 Markdown）
+  → Ingestion（读取 manifest.jsonl 元数据 / 纯 Markdown 扫描）
+  → Document Profile（识别 source_type/document_type/scope_json/tags_json）
+  → Structure Parse（Markdown AST：标题/Markdown table/HTML table/代码块/列表/段落）
+  → Segmentation（AST → L0 segments，拆分 block_type 与 section_role，计算 hash/normalize/simhash）
   → Canonicalization（三层去重归并 → L1 canonical + L2 source mapping）
-  → Publishing（写入 staging publish version）
+  → Publishing（写入 staging publish version，SQLite 使用共享 DDL）
 ```
 
 ## 3. 模块划分
@@ -33,27 +36,39 @@ Markdown 文件
 
 文件: `knowledge_mining/mining/ingestion/`
 
-- 扫描输入目录中的 Markdown 文件
-- 读取文件内容
+支持两种输入模式：
+
+**模式 A：manifest.jsonl 驱动**
+- 读取输入目录中的 `manifest.jsonl`
+- 每行包含 `doc_id`, `title`, `doc_type`, `nf`, `scenario_tags`, `source_type`, `path`, `note`
+- 按 `path` 字段读取对应 Markdown 文件
+- 输出 `RawDocumentData`，包含 manifest 元数据
+
+**模式 B：纯 Markdown 目录**
+- 递归扫描 `.md` 文件
 - 解析 YAML frontmatter（如有）
-- 输出 `RawDocumentData` 数据对象（file_path, content, frontmatter）
+- 无 manifest 时，`document_key` 由相对路径生成
+- 输出 `RawDocumentData`
 
 ### 3.2 document_profile
 
 文件: `knowledge_mining/mining/document_profile/`
 
-- 基于 frontmatter 字段和文件路径规则识别：
-  - `product`（产品名，如 UDG, UNC, UPF）
-  - `product_version`（产品版本，如 V100R023C10）
-  - `network_element`（网元，如 AMF, SMF, UPF）
-  - `document_type`（文档类型：command_manual, feature_guide, release_note, reference, other）
-- 输出带画像的 `DocumentProfile`
+以 `source_type`、`document_type`、`scope_json`、`tags_json` 为核心：
 
-识别规则：
-1. frontmatter 显式声明优先
-2. 文件路径/目录结构推断（如 `UDG/V100R023C10/OM参考.md`）
-3. 内容模式匹配（如包含大量 MML 命令 → command_manual）
-4. 无法判断时设为 `other`
+- `source_type`：从 manifest 或 frontmatter 获取（`productdoc_export`, `official_vendor`, `expert_authored`, `user_import`, `synthetic_coldstart`, `other`）
+- `document_type`：从 manifest `doc_type` 或内容推断（`command`, `feature`, `procedure`, `troubleshooting`, `alarm`, `constraint`, `checklist`, `expert_note`, `project_note`, `standard`, `training`, `reference`, `other`）
+- `scope_json`：产品/版本/网元等作为可选 facet，放入 scope_json
+- `tags_json`：从 manifest `scenario_tags` 或内容提取
+
+`product`、`product_version`、`network_element` 保持为兼容字段，从 `nf`（网元列表）或路径推断。
+
+识别优先级：
+1. manifest.jsonl 元数据
+2. frontmatter 显式声明
+3. 文件路径/目录结构推断
+4. 内容模式匹配
+5. 无法判断时设为默认值
 
 ### 3.3 structure
 
@@ -63,136 +78,114 @@ Markdown 文件
 - 构建 Section 树（基于标题层级）
 - 识别内容块类型：
   - 标题（heading）
-  - 表格（table）
+  - 标准 Markdown 表格（table）
+  - **原始 HTML 表格**（html_table）——识别 `<table>` 标签
   - 代码块（fence / code_block）
   - 列表（bullet_list / ordered_list）
   - 段落（paragraph）
   - 块引用（blockquote）
-- 输出 `SectionNode` 树，每个节点包含 path、level、children、content_blocks
+  - 原始 HTML（raw_html）
+  - 未知结构 → 保留原文，标记 unknown
+- 输出 `SectionNode` 树
 
 ### 3.4 segmentation
 
 文件: `knowledge_mining/mining/segmentation/`
 
-- 遍历 Section 树，按规则切分为 L0 segments
-- 每个 segment 包含：
-  - `section_path`：JSON 数组表示的章节路径
-  - `section_title`：最近标题
-  - `heading_level`：标题级别
-  - `segment_type`：command / parameter / example / note / table / paragraph / concept / other
-  - `raw_text`：原文
-  - `normalized_text`：归一化文本（去空格、统一大小写、符号处理）
-  - `content_hash`：sha256(raw_text)
-  - `normalized_hash`：sha256(normalized_text)
-  - `token_count`：token 数量（CJK 感知）
-  - `command_name`：如果段落涉及命令（如 ADD APN）
+拆分 `block_type`（结构形态）和 `section_role`（语义角色）：
+
+**block_type**（结构形态）：
+- `heading`, `paragraph`, `list`, `table`, `html_table`, `table_like`, `code`, `blockquote`, `raw_html`, `unknown`
+
+**section_role**（语义角色，通过弱规则推断）：
+- `parameter`, `example`, `note`, `precondition`, `procedure_step`, `troubleshooting_step`, `concept_intro`, null（无法判断时）
 
 切分规则：
 - 每个 heading 及其后续内容块组成一个 segment group
-- 表格独立为一个 segment（segment_type = table）
-- 代码块独立为一个 segment（segment_type = example）
-- 命令相关段落标记 command_name
+- Markdown table 独立为一个 segment（block_type = table）
+- HTML table 独立为一个 segment（block_type = html_table），保留 raw HTML
+- 代码块独立为一个 segment（block_type = code）
+- 其余内容合并为一个 segment（block_type = paragraph）
+
+command_name 检测：正则匹配 `ADD|MOD|DEL|SET|DSP|LST|SHOW` + 参数名模式。
+
+每个 segment 计算：
+- `content_hash` / `normalized_hash` / `token_count`
+- `section_path`（JSON 数组）
+- `structure_json`（表格列数/行数等结构信息）
+- `source_offsets_json`（在原文中的位置信息）
 
 ### 3.5 canonicalization
 
 文件: `knowledge_mining/mining/canonicalization/`
 
-三层去重归并：
+三层去重归并（不变）：
 
 | 层 | 判定条件 | relation_type | 动作 |
 |---|---|---|---|
-| 完全重复 | content_hash 相同 | `exact_duplicate` | 合并到同一 canonical |
-| 归一重复 | normalized_hash 相同 | `near_duplicate` | 合并到同一 canonical |
-| 近似重复 | simhash 汉明距离 ≤ 3 且 Jaccard ≥ 0.85 | `near_duplicate` | 合并到同一 canonical |
-| 版本差异 | 同 product 不同 version | `version_variant` | 合并，设 has_variants=true |
-| 产品差异 | 不同 product | `product_variant` | 合并，设 has_variants=true |
-| 网元差异 | 不同 network_element | `ne_variant` | 合并，设 has_variants=true |
-| 其他 | 不满足上述条件 | `primary` | 新建 canonical |
+| 完全重复 | content_hash 相同 | `exact_duplicate` | 合并 |
+| 归一重复 | normalized_hash 相同 | `near_duplicate` | 合并 |
+| 近似重复 | simhash ≤ 3 且 Jaccard ≥ 0.85 | `near_duplicate` | 合并 |
+| scope 差异 | scope_json 中 product/version/NE 不同 | `version_variant` / `product_variant` / `ne_variant` | 合并，has_variants=true |
+| 其他 | 不满足上述 | `primary` | 新建 canonical |
 
-L1 CanonicalSegment 生成：
-- `canonical_text`：选择 primary 或最长 raw_text
-- `title`：从 section_title 或 heading 提取
-- `segment_type`：与 L0 一致
-- `has_variants`：存在 variant 时为 true
-- `variant_policy`：根据 variant 类型设置
-- `search_text`：canonical_text + title 拼接，用于全文检索
-
-L2 CanonicalSegmentSource 生成：
-- 每个 L0 → L1 映射一条记录
-- 第一个 L0 标记为 `is_primary = true`
-- 其余标记 relation_type 和 similarity_score
+L1 增加 `section_role` 字段（从 L0 继承）。
 
 ### 3.6 publishing
 
 文件: `knowledge_mining/mining/publishing/`
 
 - 创建 source_batch 记录
-- 创建 staging publish_version（base 为当前 active 或无）
-- 写入 raw_documents
-- 写入 raw_segments
-- 写入 canonical_segments
+- 创建 staging publish_version
+- 写入 raw_documents（含 scope_json, tags_json, source_type, relative_path, raw_storage_uri, structure_quality 等 v0.4 字段）
+- 写入 raw_segments（含 block_type, section_role, structure_json, source_offsets_json）
+- 写入 canonical_segments（含 section_role）
 - 写入 canonical_segment_sources
-- 执行完整性校验
 - 切换 staging → active
 
 ## 4. 数据对象
 
-Pipeline 内部用 dataclass 传递，不直接操作数据库模型：
+Pipeline 内部用 dataclass 传递：
 
-- `RawDocumentData`（ingestion 输出）
-- `DocumentProfile`（document_profile 输出）
+- `RawDocumentData`（ingestion 输出）— 含 manifest 元数据
+- `DocumentProfile`（document_profile 输出）— 以 source_type/document_type/scope_json/tags_json 为核心
 - `SectionNode` / `ContentBlock`（structure 输出）
-- `RawSegmentData`（segmentation 输出）
+- `RawSegmentData`（segmentation 输出）— 含 block_type + section_role
 - `CanonicalSegmentData` / `SourceMappingData`（canonicalization 输出）
 
-## 5. Pipeline 编排
+## 5. Dev 模式 SQLite
 
-`knowledge_mining/mining/jobs/run.py` 统一编排：
+**不再在 `knowledge_mining/mining/db.py` 中内嵌 DDL。**
 
-```python
-def run_pipeline(input_path: str, db_url: str):
-    documents = ingest(input_path)
-    profiles = [profile_document(doc) for doc in documents]
-    all_raw_segments = []
-    for doc, profile in zip(documents, profiles):
-        sections = parse_structure(doc.content)
-        segments = segment(sections, profile)
-        all_raw_segments.extend(segments)
-    canonicals, sources = canonicalize(all_raw_segments)
-    publish(all_raw_segments, canonicals, sources, db_url)
-```
+SQLite 初始化改为读取共享文件 `knowledge_assets/schemas/001_asset_core.sqlite.sql`。`db.py` 只负责：
+- 连接管理
+- 读取共享 SQL 文件执行建表
+- 数据写入封装
 
-## 6. Dev 模式 SQLite
+SQLite 表名使用 `asset_` 前缀（与共享 DDL 一致）。
 
-架构文档要求 dev 用文件 SQLite（`.dev/agent_kb.sqlite`）。
-
-M1 需要在代码中提供 SQLite 兼容建表逻辑：
-- 替换 `gen_random_uuid()` 为 Python `uuid4()`
-- 替换 `TIMESTAMPTZ` 为 `TEXT`（ISO 8601）
-- 不使用 `pgcrypto` 扩展
-- 不使用 PostgreSQL 特有的 `to_tsvector` GIN 索引
-
-## 7. 新增依赖
+## 6. 新增依赖
 
 ```toml
 dependencies = [
-    "markdown-it-py>=3.0",    # Markdown AST 解析
+    "markdown-it-py>=3.0",
 ]
 ```
 
-## 8. 验证方式
+## 7. 测试覆盖
 
-用合成 Markdown 样例验证（放在 `knowledge_assets/samples/` 下）：
+在原有合成 Markdown 测试基础上，新增：
 
-1. ingestion 能读取 Markdown 并提取内容
-2. document_profile 能识别产品/版本/网元
-3. segmentation 能生成 L0 segments，每个有 section_path、raw_text、hash
-4. canonicalization 能去重，重复概念只生成一个 canonical segment
-5. publishing 能写入 SQLite staging publish version 并查询
+| 测试 | 目标 |
+|---|---|
+| `test_ingest_manifest` | 读取 manifest.jsonl 并生成带元数据的 document |
+| `test_ingest_plain_markdown_no_metadata` | 无 manifest 无 frontmatter 也可导入 |
+| `test_parse_html_table_block` | Markdown 中保留的 `<table>` 不丢失 |
+| `test_segment_block_type_and_section_role` | block 形态和语义角色分离 |
+| `test_expert_document_profile` | 专家文档不需要 product/version/NE |
+| `test_sqlite_schema_from_shared_file` | dev DB 使用共享 `001_asset_core.sqlite.sql` |
 
-单元测试覆盖每个模块，集成测试覆盖完整 pipeline。
-
-## 9. 不做的事
+## 8. 不做的事
 
 - 不做 FastAPI / Skill / 在线检索 / context pack
 - 不做 PDF/Word 解析
@@ -200,7 +193,26 @@ dependencies = [
 - 不做命令抽取（M2 范围）
 - 不依赖 `agent_serving` 代码
 - 不从 `old/ontology` 生成 alias_dictionary
+- 不在 `knowledge_mining/**` 中维护私有 asset DDL
 
-## 10. Schema 兼容性
+## 9. Schema 兼容性
 
-本任务使用 Codex 已定义的 schema（`knowledge_assets/schemas/001_asset_core.sql`），不修改 schema 定义。仅在代码中提供 SQLite 兼容建表实现。
+本任务使用 Codex 已定义的 schema v0.4（`knowledge_assets/schemas/001_asset_core.sql` 和 `001_asset_core.sqlite.sql`），不修改 schema 定义。SQLite dev 模式读取共享 `001_asset_core.sqlite.sql`。对 Serving 任务无兼容性影响。
+
+## 10. 上游转换器适配
+
+`cloud_core_coldstart_md/` 目录包含：
+- `manifest.jsonl`：每行一个文档的元数据（doc_id, title, doc_type, nf, scenario_tags, source_type, path）
+- `productdoc_to_md.py`：HTML→Markdown 转换器（M1 直接使用其输出，不调用转换器本身）
+- 分类 Markdown 文档（features, commands, procedures, troubleshooting, constraints_alarms）
+
+Ingestion 优先读取 manifest.jsonl。mapping 字段到 schema 的映射：
+
+| manifest 字段 | 落库位置 |
+|---|---|
+| `doc_id` | `document_key` / `metadata_json.doc_id` |
+| `doc_type` | `document_type` |
+| `nf` | `scope_json.network_elements` / `network_element`（兼容字段） |
+| `scenario_tags` | `tags_json` |
+| `source_type` | `source_type` |
+| `path` | `relative_path` |

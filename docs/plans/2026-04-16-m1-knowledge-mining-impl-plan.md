@@ -1,10 +1,11 @@
 # M1 Knowledge Mining Implementation Plan
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
+> **版本:** v1.1 — 基于 Codex 审查 P1-P2 修订；对齐 schema v0.4；纳入 manifest.jsonl；拆分 block_type/section_role；SQLite 读取共享 DDL
 
-**Goal:** 实现离线知识挖掘最小闭环：Markdown → L0 raw_segments → L1 canonical_segments → L2 canonical_segment_sources，写入 SQLite staging publish version。
+**Goal:** 实现离线知识挖掘最小闭环：上游转换后 Markdown / source artifacts → L0 raw_segments → L1 canonical_segments → L2 canonical_segment_sources，写入 SQLite staging publish version。
 
-**Architecture:** 6 模块 pipeline（ingestion → document_profile → structure → segmentation → canonicalization → publishing），内部用 dataclass 传递数据，SQLite dev 模式，三层 hash 去重。
+**Architecture:** 6 模块 pipeline（ingestion → document_profile → structure → segmentation → canonicalization → publishing），内部用 dataclass 传递数据，SQLite dev 模式读取共享 DDL，三层 hash 去重，block_type 与 section_role 分离。
 
 **Tech Stack:** Python 3.11+, markdown-it-py, SQLite, pytest
 
@@ -45,255 +46,133 @@ git commit -m "[claude-mining]: add markdown-it-py dependency for M1 mining"
 
 ---
 
-### Task 2: 数据对象定义
+### Task 2: 数据对象定义（v1.1 修订：对齐 schema v0.4）
 
 **Files:**
 - Create: `knowledge_mining/mining/models.py`
 - Test: `knowledge_mining/tests/test_models.py`
 
-**Step 1: 写测试**
+**关键变更（v1.1）：**
+- `RawDocumentData` 增加 `manifest_meta` 字段，存储 manifest.jsonl 元数据
+- `DocumentProfile` 以 `source_type/document_type/scope_json/tags_json` 为核心，product 为可选 facet
+- `RawSegmentData` 拆分 `block_type`（结构形态）和 `section_role`（语义角色），增加 `structure_json`、`source_offsets_json`
+- `CanonicalSegmentData` 增加 `section_role`
+- `ContentBlock.block_type` 增加 `html_table`、`raw_html`、`unknown`
+
+**Step 1: 写测试** — 测试 dataclass 能实例化、字段正确。
+
+测试需覆盖：
+1. `RawDocumentData` 含 manifest 元数据
+2. `DocumentProfile` 含 source_type、scope_json、tags_json
+3. `ContentBlock` 含 html_table block_type
+4. `RawSegmentData` 含 block_type 和 section_role
+5. `CanonicalSegmentData` 含 section_role
+
+**Step 2-5: 同标准 TDD 流程**
+
+实现要点（models.py）：
 
 ```python
-# knowledge_mining/tests/test_models.py
-"""Verify data models can be instantiated and fields are correct."""
-from knowledge_mining.mining.models import (
-    RawDocumentData,
-    DocumentProfile,
-    SectionNode,
-    ContentBlock,
-    RawSegmentData,
-    CanonicalSegmentData,
-    SourceMappingData,
-)
-
-
-def test_raw_document_data():
-    doc = RawDocumentData(
-        file_path="UDG/OM参考.md",
-        content="# ADD APN\n",
-        frontmatter={"product": "UDG"},
-    )
-    assert doc.file_path == "UDG/OM参考.md"
-    assert doc.frontmatter["product"] == "UDG"
-
-
-def test_document_profile():
-    profile = DocumentProfile(
-        file_path="UDG/OM参考.md",
-        product="UDG",
-        product_version="V100R023C10",
-        network_element=None,
-        document_type="command_manual",
-    )
-    assert profile.product == "UDG"
-    assert profile.document_type == "command_manual"
-
-
-def test_section_node():
-    block = ContentBlock(block_type="paragraph", text="hello")
-    node = SectionNode(
-        path=["OM参考", "ADD APN"],
-        level=2,
-        title="ADD APN",
-        blocks=[block],
-        children=[],
-    )
-    assert node.path == ["OM参考", "ADD APN"]
-    assert len(node.blocks) == 1
-
-
-def test_raw_segment_data():
-    seg = RawSegmentData(
-        document_file_path="UDG/OM参考.md",
-        segment_index=0,
-        section_path=["OM参考", "ADD APN"],
-        section_title="ADD APN",
-        heading_level=2,
-        segment_type="paragraph",
-        raw_text="some text",
-        normalized_text="some text",
-        content_hash="abc123",
-        normalized_hash="abc123",
-        token_count=2,
-        command_name=None,
-    )
-    assert seg.segment_type == "paragraph"
-    assert seg.token_count == 2
-
-
-def test_canonical_segment_data():
-    cs = CanonicalSegmentData(
-        canonical_key="C001",
-        segment_type="paragraph",
-        title="ADD APN",
-        canonical_text="merged text",
-        search_text="ADD APN merged text",
-        has_variants=False,
-        variant_policy="none",
-        command_name=None,
-        raw_segment_refs=["seg1", "seg2"],
-    )
-    assert cs.has_variants is False
-
-
-def test_source_mapping_data():
-    sm = SourceMappingData(
-        canonical_key="C001",
-        raw_segment_document_path="UDG/OM参考.md",
-        raw_segment_index=0,
-        relation_type="primary",
-        is_primary=True,
-        priority=100,
-        similarity_score=None,
-        diff_summary=None,
-    )
-    assert sm.relation_type == "primary"
-```
-
-**Step 2: 运行测试确认失败**
-
-Run: `cd D:/mywork/KnowledgeBase/CoreMasterKB && python -m pytest knowledge_mining/tests/test_models.py -v`
-Expected: FAIL — `ModuleNotFoundError`
-
-**Step 3: 写实现**
-
-```python
-# knowledge_mining/mining/models.py
-"""Data objects for the knowledge mining pipeline."""
-from __future__ import annotations
-
-from dataclasses import dataclass, field
-from typing import Any
-
-
 @dataclass(frozen=True)
 class RawDocumentData:
-    """Output of ingestion: raw Markdown file content."""
     file_path: str
     content: str
     frontmatter: dict[str, Any] = field(default_factory=dict)
-
+    manifest_meta: dict[str, Any] = field(default_factory=dict)
 
 @dataclass(frozen=True)
 class DocumentProfile:
-    """Output of document_profile: identified product/version/NE."""
     file_path: str
-    product: str | None = None
-    product_version: str | None = None
-    network_element: str | None = None
-    document_type: str | None = None
-
+    source_type: str = "other"           # productdoc_export, official_vendor, expert_authored, etc.
+    document_type: str | None = None     # command, feature, procedure, troubleshooting, etc.
+    scope_json: dict[str, Any] = field(default_factory=dict)  # product/version/NE as optional facets
+    tags_json: list[str] = field(default_factory=list)
+    product: str | None = None           # 兼容字段
+    product_version: str | None = None   # 兼容字段
+    network_element: str | None = None   # 兼容字段
+    structure_quality: str = "unknown"
 
 @dataclass(frozen=True)
 class ContentBlock:
-    """A content block within a section (paragraph, table, code, etc.)."""
-    block_type: str  # paragraph, table, fence, bullet_list, ordered_list, blockquote
+    block_type: str  # heading, paragraph, list, table, html_table, code, blockquote, raw_html, unknown
     text: str
-    language: str | None = None  # for fence blocks
-
-
-@dataclass(frozen=True)
-class SectionNode:
-    """A section in the document structure tree."""
-    path: list[str]
-    level: int
-    title: str
-    blocks: list[ContentBlock]
-    children: list[SectionNode] = field(default_factory=list)
-
+    language: str | None = None
 
 @dataclass(frozen=True)
 class RawSegmentData:
-    """Output of segmentation: one L0 raw segment."""
     document_file_path: str
     segment_index: int
     section_path: list[str]
     section_title: str | None
     heading_level: int | None
-    segment_type: str  # command, parameter, example, note, table, paragraph, concept, other
-    raw_text: str
-    normalized_text: str
-    content_hash: str
-    normalized_hash: str
-    token_count: int | None
+    segment_type: str       # command, parameter, example, note, table, paragraph, concept, other
+    block_type: str = "unknown"  # heading, paragraph, list, table, html_table, code, blockquote, raw_html, unknown
+    section_role: str | None = None  # parameter, example, note, precondition, procedure_step, etc.
+    raw_text: str = ""
+    normalized_text: str = ""
+    content_hash: str = ""
+    normalized_hash: str = ""
+    token_count: int | None = None
     command_name: str | None = None
-
+    structure_json: dict[str, Any] = field(default_factory=dict)
+    source_offsets_json: dict[str, Any] = field(default_factory=dict)
 
 @dataclass(frozen=True)
 class CanonicalSegmentData:
-    """Output of canonicalization: one L1 canonical segment."""
     canonical_key: str
     segment_type: str
+    section_role: str | None = None  # v0.4 新增
     title: str | None
     canonical_text: str
     search_text: str
     has_variants: bool
-    variant_policy: str  # none, prefer_latest, require_version, require_product_version, require_ne
+    variant_policy: str
     command_name: str | None
-    raw_segment_refs: list[str]  # list of "document_path::segment_index" identifiers
-
-
-@dataclass(frozen=True)
-class SourceMappingData:
-    """Output of canonicalization: one L2 source mapping."""
-    canonical_key: str
-    raw_segment_document_path: str
-    raw_segment_index: int
-    relation_type: str  # primary, exact_duplicate, near_duplicate, version_variant, product_variant, ne_variant, conflict_candidate
-    is_primary: bool
-    priority: int
-    similarity_score: float | None
-    diff_summary: str | None
-```
-
-**Step 4: 运行测试确认通过**
-
-Run: `cd D:/mywork/KnowledgeBase/CoreMasterKB && python -m pytest knowledge_mining/tests/test_models.py -v`
-Expected: 6 passed
-
-**Step 5: Commit**
-
-```bash
-git add knowledge_mining/mining/models.py knowledge_mining/tests/test_models.py
-git commit -m "[claude-mining]: add pipeline data models"
+    raw_segment_refs: list[str]
 ```
 
 ---
 
-### Task 3: SQLite Schema Adapter
+### Task 3: SQLite Schema Adapter（v1.1 修订：读取共享 DDL）
 
 **Files:**
 - Create: `knowledge_mining/mining/db.py`
 - Test: `knowledge_mining/tests/test_db.py`
+- 引用: `knowledge_assets/schemas/001_asset_core.sqlite.sql`
+
+**关键变更（v1.1）：**
+- 不在 db.py 中内嵌 DDL，改为读取共享 `knowledge_assets/schemas/001_asset_core.sqlite.sql`
+- SQLite 表名使用 `asset_` 前缀（与共享 DDL 一致）
+- raw_documents 包含 scope_json, tags_json, source_type, relative_path, structure_quality 等字段
+- raw_segments 包含 block_type, section_role, structure_json, source_offsets_json
 
 **Step 1: 写测试**
 
 ```python
 # knowledge_mining/tests/test_db.py
-"""Verify SQLite schema creation and basic CRUD."""
-import sqlite3
+"""Verify SQLite schema creation from shared DDL and basic CRUD."""
 import tempfile
 from pathlib import Path
 
 from knowledge_mining.mining.db import MiningDB
 
 
-def test_create_tables():
+def test_create_tables_from_shared_ddl():
+    """Schema must be loaded from the shared SQLite DDL file."""
     with tempfile.TemporaryDirectory() as tmp:
         db = MiningDB(Path(tmp) / "test.sqlite")
         db.create_tables()
         conn = db.connect()
-        # Verify all 6 tables exist
         cursor = conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
         )
         tables = [row[0] for row in cursor]
-        assert "source_batches" in tables
-        assert "publish_versions" in tables
-        assert "raw_documents" in tables
-        assert "raw_segments" in tables
-        assert "canonical_segments" in tables
-        assert "canonical_segment_sources" in tables
+        assert "asset_source_batches" in tables
+        assert "asset_publish_versions" in tables
+        assert "asset_raw_documents" in tables
+        assert "asset_raw_segments" in tables
+        assert "asset_canonical_segments" in tables
+        assert "asset_canonical_segment_sources" in tables
         conn.close()
 
 
@@ -304,151 +183,49 @@ def test_insert_and_query_publish_version():
         conn = db.connect()
         pv_id = db.create_publish_version(conn, version_code="v1", status="staging")
         cursor = conn.execute(
-            "SELECT version_code, status FROM publish_versions WHERE id = ?",
+            "SELECT version_code, status FROM asset_publish_versions WHERE id = ?",
             (pv_id,),
         )
         row = cursor.fetchone()
         assert row == ("v1", "staging")
         conn.close()
+
+
+def test_raw_documents_has_v04_fields():
+    """Verify v0.4 fields exist: scope_json, tags_json, source_type, structure_quality."""
+    with tempfile.TemporaryDirectory() as tmp:
+        db = MiningDB(Path(tmp) / "test.sqlite")
+        db.create_tables()
+        conn = db.connect()
+        pv_id = db.create_publish_version(conn, version_code="v1", status="staging")
+        conn.execute(
+            """INSERT INTO asset_raw_documents
+               (id, publish_version_id, document_key, source_uri, file_name,
+                file_type, content_hash, scope_json, tags_json, source_type,
+                structure_quality, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            ("d1", pv_id, "test_doc", "/test.md", "test.md",
+             "markdown", "abc", '{"product":"UDG"}', '["5G"]',
+             "synthetic_coldstart", "markdown_native", "2026-01-01T00:00:00Z"),
+        )
+        conn.commit()
+        cursor = conn.execute(
+            "SELECT scope_json, tags_json, source_type, structure_quality FROM asset_raw_documents WHERE id = ?",
+            ("d1",),
+        )
+        row = cursor.fetchone()
+        assert row is not None
+        assert "product" in row[0]
+        conn.close()
 ```
 
-**Step 2: 运行测试确认失败**
+**Step 2-3: 同标准 TDD 流程**
 
-Run: `cd D:/mywork/KnowledgeBase/CoreMasterKB && python -m pytest knowledge_mining/tests/test_db.py -v`
-Expected: FAIL
-
-**Step 3: 写实现**
+实现要点（db.py）：
 
 ```python
-# knowledge_mining/mining/db.py
-"""SQLite schema adapter for the mining pipeline (dev mode)."""
-from __future__ import annotations
-
-import uuid
-from datetime import datetime, timezone
-from pathlib import Path
-import sqlite3
-
-
-_SCHEMA_SQL = """
-CREATE TABLE IF NOT EXISTS source_batches (
-    id              TEXT PRIMARY KEY,
-    batch_code      TEXT NOT NULL UNIQUE,
-    source_type     TEXT NOT NULL,
-    description     TEXT,
-    created_by      TEXT,
-    created_at      TEXT NOT NULL,
-    metadata_json   TEXT NOT NULL DEFAULT '{}'
-);
-
-CREATE TABLE IF NOT EXISTS publish_versions (
-    id                      TEXT PRIMARY KEY,
-    version_code            TEXT NOT NULL UNIQUE,
-    status                  TEXT NOT NULL,
-    base_publish_version_id TEXT,
-    source_batch_id         TEXT,
-    description             TEXT,
-    build_started_at        TEXT NOT NULL,
-    build_finished_at       TEXT,
-    activated_at            TEXT,
-    build_error             TEXT,
-    metadata_json           TEXT NOT NULL DEFAULT '{}'
-);
-
-CREATE TABLE IF NOT EXISTS raw_documents (
-    id                      TEXT PRIMARY KEY,
-    publish_version_id      TEXT NOT NULL,
-    document_key            TEXT NOT NULL,
-    source_uri              TEXT NOT NULL,
-    file_name               TEXT NOT NULL,
-    file_type               TEXT NOT NULL,
-    title                   TEXT,
-    product                 TEXT,
-    product_version         TEXT,
-    network_element         TEXT,
-    document_type           TEXT,
-    content_hash            TEXT NOT NULL,
-    copied_from_document_id TEXT,
-    origin_batch_id         TEXT,
-    created_at              TEXT NOT NULL,
-    metadata_json           TEXT NOT NULL DEFAULT '{}',
-    UNIQUE(publish_version_id, document_key)
-);
-
-CREATE TABLE IF NOT EXISTS raw_segments (
-    id                     TEXT PRIMARY KEY,
-    publish_version_id     TEXT NOT NULL,
-    raw_document_id        TEXT NOT NULL,
-    segment_key            TEXT NOT NULL,
-    segment_index          INTEGER NOT NULL,
-    section_path           TEXT NOT NULL DEFAULT '[]',
-    section_title          TEXT,
-    heading_level          INTEGER,
-    segment_type           TEXT NOT NULL,
-    command_name           TEXT,
-    raw_text               TEXT NOT NULL,
-    normalized_text        TEXT NOT NULL,
-    content_hash           TEXT NOT NULL,
-    normalized_hash        TEXT NOT NULL,
-    token_count            INTEGER,
-    copied_from_segment_id TEXT,
-    metadata_json          TEXT NOT NULL DEFAULT '{}',
-    UNIQUE(publish_version_id, raw_document_id, segment_key)
-);
-
-CREATE TABLE IF NOT EXISTS canonical_segments (
-    id                 TEXT PRIMARY KEY,
-    publish_version_id TEXT NOT NULL,
-    canonical_key      TEXT NOT NULL,
-    segment_type       TEXT NOT NULL,
-    title              TEXT,
-    command_name       TEXT,
-    canonical_text     TEXT NOT NULL,
-    summary            TEXT,
-    search_text        TEXT NOT NULL,
-    has_variants       INTEGER NOT NULL DEFAULT 0,
-    variant_policy     TEXT NOT NULL DEFAULT 'none',
-    quality_score      REAL,
-    created_at         TEXT NOT NULL,
-    metadata_json      TEXT NOT NULL DEFAULT '{}',
-    UNIQUE(publish_version_id, canonical_key)
-);
-
-CREATE TABLE IF NOT EXISTS canonical_segment_sources (
-    id                   TEXT PRIMARY KEY,
-    publish_version_id   TEXT NOT NULL,
-    canonical_segment_id TEXT NOT NULL,
-    raw_segment_id       TEXT NOT NULL,
-    relation_type        TEXT NOT NULL,
-    is_primary           INTEGER NOT NULL DEFAULT 0,
-    priority             INTEGER NOT NULL DEFAULT 100,
-    similarity_score     REAL,
-    diff_summary         TEXT,
-    metadata_json        TEXT NOT NULL DEFAULT '{}',
-    UNIQUE(canonical_segment_id, raw_segment_id)
-);
-
-CREATE INDEX IF NOT EXISTS idx_raw_segments_publish_document
-    ON raw_segments(publish_version_id, raw_document_id);
-
-CREATE INDEX IF NOT EXISTS idx_raw_segments_normalized_hash
-    ON raw_segments(publish_version_id, normalized_hash);
-
-CREATE INDEX IF NOT EXISTS idx_canonical_segments_search_text
-    ON canonical_segments(publish_version_id, segment_type);
-"""
-
-
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
-def _new_id() -> str:
-    return str(uuid.uuid4())
-
-
 class MiningDB:
-    """SQLite adapter for the mining pipeline."""
+    _SHARED_SCHEMA_PATH = Path(__file__).resolve().parents[3] / "knowledge_assets" / "schemas" / "001_asset_core.sqlite.sql"
 
     def __init__(self, db_path: Path) -> None:
         self._db_path = db_path
@@ -460,39 +237,13 @@ class MiningDB:
         return conn
 
     def create_tables(self) -> None:
+        schema_sql = self._SHARED_SCHEMA_PATH.read_text(encoding="utf-8")
         conn = self.connect()
-        conn.executescript(_SCHEMA_SQL)
+        conn.executescript(schema_sql)
         conn.close()
-
-    def create_publish_version(
-        self,
-        conn: sqlite3.Connection,
-        version_code: str,
-        status: str = "staging",
-        description: str | None = None,
-    ) -> str:
-        pv_id = _new_id()
-        conn.execute(
-            """INSERT INTO publish_versions
-               (id, version_code, status, build_started_at, description)
-               VALUES (?, ?, ?, ?, ?)""",
-            (pv_id, version_code, status, _now_iso(), description),
-        )
-        conn.commit()
-        return pv_id
 ```
 
-**Step 4: 运行测试确认通过**
-
-Run: `cd D:/mywork/KnowledgeBase/CoreMasterKB && python -m pytest knowledge_mining/tests/test_db.py -v`
-Expected: 2 passed
-
-**Step 5: Commit**
-
-```bash
-git add knowledge_mining/mining/db.py knowledge_mining/tests/test_db.py
-git commit -m "[claude-mining]: add SQLite schema adapter for dev mode"
-```
+**Step 4-5: 运行测试通过后提交**
 
 ---
 
@@ -699,165 +450,120 @@ git commit -m "[claude-mining]: add text hashing, normalization, and simhash uti
 
 ---
 
-### Task 5: Ingestion Module
+### Task 5: Ingestion Module（v1.1 修订：支持 manifest.jsonl）
 
 **Files:**
 - Modify: `knowledge_mining/mining/ingestion/__init__.py`
 - Test: `knowledge_mining/tests/test_ingestion.py`
 
+**关键变更（v1.1）：**
+- 支持两种模式：manifest.jsonl 驱动（模式 A）和纯 Markdown 目录（模式 B）
+- manifest.jsonl 每行含 doc_id, title, doc_type, nf, scenario_tags, source_type, path
+- 无 manifest 时仍可递归扫描 .md 文件
+
 **Step 1: 写测试**
 
-```python
-# knowledge_mining/tests/test_ingestion.py
-"""Verify Markdown ingestion."""
-import tempfile
-from pathlib import Path
+需覆盖：
+1. 纯 Markdown 目录扫描（原有）
+2. frontmatter 解析（原有）
+3. **manifest.jsonl 驱动导入** — 读取 manifest，按 path 读取 md，元数据进 manifest_meta
+4. **无 manifest 无 frontmatter** — 仍可导入，document_key 由相对路径生成
+5. 空目录、非 Markdown 跳过、递归（原有）
 
-from knowledge_mining.mining.ingestion import ingest_directory
+**Step 2-5: 同标准 TDD 流程**
 
-
-def test_ingest_single_file():
-    with tempfile.TemporaryDirectory() as tmp:
-        md_file = Path(tmp) / "test.md"
-        md_file.write_text("# Title\nHello world\n", encoding="utf-8")
-        docs = ingest_directory(Path(tmp))
-        assert len(docs) == 1
-        assert docs[0].file_path == str(md_file)
-        assert "# Title" in docs[0].content
-
-
-def test_ingest_skips_non_markdown():
-    with tempfile.TemporaryDirectory() as tmp:
-        (Path(tmp) / "readme.txt").write_text("not md", encoding="utf-8")
-        (Path(tmp) / "doc.md").write_text("# Doc\n", encoding="utf-8")
-        docs = ingest_directory(Path(tmp))
-        assert len(docs) == 1
-
-
-def test_ingest_frontmatter():
-    with tempfile.TemporaryDirectory() as tmp:
-        md_file = Path(tmp) / "doc.md"
-        md_file.write_text(
-            "---\nproduct: UDG\nversion: V100R023C10\n---\n# Title\n",
-            encoding="utf-8",
-        )
-        docs = ingest_directory(Path(tmp))
-        assert docs[0].frontmatter["product"] == "UDG"
-        assert docs[0].frontmatter["version"] == "V100R023C10"
-        assert "# Title" in docs[0].content
-
-
-def test_ingest_empty_directory():
-    with tempfile.TemporaryDirectory() as tmp:
-        docs = ingest_directory(Path(tmp))
-        assert docs == []
-
-
-def test_ingest_recursive():
-    with tempfile.TemporaryDirectory() as tmp:
-        sub = Path(tmp) / "sub"
-        sub.mkdir()
-        (sub / "a.md").write_text("# A\n", encoding="utf-8")
-        (Path(tmp) / "b.md").write_text("# B\n", encoding="utf-8")
-        docs = ingest_directory(Path(tmp))
-        assert len(docs) == 2
-```
-
-**Step 2: 运行测试确认失败**
-
-**Step 3: 写实现** 到 `knowledge_mining/mining/ingestion/__init__.py`，实现 `ingest_directory(path) -> list[RawDocumentData]`，包含 YAML frontmatter 解析（用 `---` 分隔符）。
-
-**Step 4: 运行测试确认通过**
-
-**Step 5: Commit**
-
-```bash
-git add knowledge_mining/mining/ingestion/__init__.py knowledge_mining/tests/test_ingestion.py
-git commit -m "[claude-mining]: add Markdown ingestion with frontmatter parsing"
-```
+实现要点：
+- `ingest_directory(path: Path) -> list[RawDocumentData]`
+- 先检查 `manifest.jsonl` 是否存在，存在则按 manifest 驱动
+- 每行 JSON 解析，按 `path` 字段读取对应 Markdown 文件
+- manifest 元数据存入 `RawDocumentData.manifest_meta`
+- 无 manifest 时，递归扫描 .md 文件
 
 ---
 
-### Task 6: Document Profile Module
+### Task 6: Document Profile Module（v1.1 修订：通用语料画像）
 
 **Files:**
 - Modify: `knowledge_mining/mining/document_profile/__init__.py`
 - Test: `knowledge_mining/tests/test_document_profile.py`
 
+**关键变更（v1.1）：**
+- 以 `source_type/document_type/scope_json/tags_json` 为核心
+- product/version/NE 为可选 facet，放入 scope_json
+- 支持专家文档（无产品/版本/NE）
+
 **Step 1: 写测试**
 
 覆盖：
-1. frontmatter 显式声明优先
-2. 路径推断（`UDG/V100R023C10/OM参考.md`）
-3. 内容模式匹配（包含 MML 命令 → command_manual）
-4. 无法判断 → other
-5. NE 识别（文件名包含 AMF/SMF/UPF 等）
+1. manifest 元数据驱动（source_type, doc_type, nf → scope_json, tags_json）
+2. frontmatter 显式声明
+3. 内容模式匹配（MML 命令 → document_type=command）
+4. 专家文档（无 product/version/NE，scope_json 含 author/team/scenario）
+5. 无任何元数据 → source_type=other, document_type=None
 
-**Step 2-5: 同上 TDD 流程**
-
-实现要点：
-- `profile_document(doc: RawDocumentData) -> DocumentProfile`
-- 从 frontmatter 提取 product/version/NE
-- 从路径中用正则提取 product（目录名）、version（V\d+R\d+C\d+）
-- 从内容中检测 MML 命令模式（ADD/MOD/DEL/SET/DSP/LST/SHOW）→ command_manual
+**Step 2-5: 同标准 TDD 流程**
 
 ---
 
-### Task 7: Structure Parser (Markdown AST)
+### Task 7: Structure Parser（v1.1 修订：支持 HTML table）
 
 **Files:**
 - Modify: `knowledge_mining/mining/structure/__init__.py`
 - Test: `knowledge_mining/tests/test_structure.py`
 
+**关键变更（v1.1）：**
+- 识别标准 Markdown table → block_type="table"
+- 识别保留的 HTML table（`<table>`）→ block_type="html_table"
+- 识别 raw HTML 块 → block_type="raw_html"
+- 未知结构 → block_type="unknown"
+
 **Step 1: 写测试**
 
 覆盖：
-1. 简单标题 + 段落 → SectionNode with path
-2. 嵌套标题（h1 > h2 > h3）→ 正确的树结构
-3. 表格 → ContentBlock(block_type="table")
-4. 代码块 → ContentBlock(block_type="fence", language="mml")
-5. 列表 → ContentBlock(block_type="bullet_list")
-6. 无标题的纯段落 → root level section
+1. 简单标题 + 段落 → SectionNode
+2. 嵌套标题 → 树结构
+3. 标准 Markdown 表格 → ContentBlock(block_type="table")
+4. **HTML `<table>` 块 → ContentBlock(block_type="html_table")**
+5. 代码块 → ContentBlock(block_type="code", language="mml")
+6. 列表 → ContentBlock(block_type="list")
+7. 无标题段落 → root level section
+8. **未知 HTML 块 → ContentBlock(block_type="raw_html")**
 
-测试用合成 Markdown string。
-
-**Step 2-5: 同上 TDD 流程**
-
-实现要点：
-- `parse_structure(content: str) -> list[SectionNode]`
-- 用 `markdown_it.MarkdownIt().parse(content)` 获取 token 流
-- 遍历 tokens 构建 SectionNode 树
-- heading tokens 创建新 section level
-- table/fence/paragraph/bullet_list/ordered_list tokens 收集为 ContentBlock
+**Step 2-5: 同标准 TDD 流程**
 
 ---
 
-### Task 8: Segmentation Module
+### Task 8: Segmentation Module（v1.1 修订：block_type/section_role 分离）
 
 **Files:**
 - Modify: `knowledge_mining/mining/segmentation/__init__.py`
 - Test: `knowledge_mining/tests/test_segmentation.py`
 
+**关键变更（v1.1）：**
+- `block_type` 表示结构形态（table, html_table, code, list, paragraph, unknown）
+- `section_role` 表示语义角色（parameter, example, note, precondition, procedure_step, troubleshooting_step, concept_intro）
+- segment_type 保持兼容（按 block_type 映射）
+- 增加 structure_json（表格列数/行数等）和 source_offsets_json
+
 **Step 1: 写测试**
 
 覆盖：
-1. 单个 section → 单个 segment
-2. 表格独立 segment（segment_type="table"）
-3. 代码块独立 segment（segment_type="example"）
-4. 包含 MML 命令名（如 ADD APN）→ command_name 设置
-5. content_hash / normalized_hash 正确计算
-6. token_count 正确计算
-7. section_path 正确传递
+1. 单个 section → segment with block_type="paragraph"
+2. Markdown 表格 → segment with block_type="table"
+3. **HTML 表格 → segment with block_type="html_table"**
+4. 代码块 → segment with block_type="code"
+5. **section_role 推断** — "参数说明"标题下 → section_role="parameter"
+6. command_name 检测（ADD APN → command_name="ADD APN"）
+7. content_hash / normalized_hash / token_count 正确
+8. section_path 正确传递
 
-**Step 2-5: 同上 TDD 流程**
+**Step 2-5: 同标准 TDD 流程**
 
 实现要点：
-- `segment_sections(sections: list[SectionNode], profile: DocumentProfile) -> list[RawSegmentData]`
-- 遍历 SectionNode 树，每个 section 按规则切分
-- 表格和代码块独立成 segment
-- 其余内容合并为一个 segment
-- 使用 text_utils 计算 hash/normalize/token_count
-- 用正则检测 command_name：`r'\b(ADD|MOD|DEL|SET|DSP|LST|SHOW)\s+\w+'`
+- segment_type 由 block_type 映射：table→table, html_table→table, code→example, list→paragraph, paragraph→paragraph
+- section_role 由标题关键词推断："参数"→parameter, "示例"→example, "注意"→note, "前置"→precondition, "排障"→troubleshooting_step, "步骤"→procedure_step
+- HTML table 的 raw_text 保留原始 HTML
+- structure_json 记录表格行数/列数等
 
 ---
 
@@ -944,27 +650,30 @@ git commit -m "[claude-mining]: add Markdown ingestion with frontmatter parsing"
 
 ---
 
-### Task 12: 合成测试样例 + 最终验证
+### Task 12: 真实语料 + 最终验证（v1.1 修订：使用 cloud_core_coldstart_md）
 
 **Files:**
-- Create: `knowledge_assets/samples/test_corpus/UDG/V100R023C10/OM参考.md`
-- Create: `knowledge_assets/samples/test_corpus/UNC/V100R019C10/OM参考.md`
-- Create: `knowledge_assets/samples/test_corpus/UDG/V100R023C10/基础知识.md`
+- Test corpus: `cloud_core_coldstart_md/`（已有 manifest.jsonl + 分类 Markdown）
+- 额外创建少量合成测试样例覆盖边界场景
 
-**Step 1: 创建测试样例**
+**Step 1: 用 cloud_core_coldstart_md 运行端到端 pipeline**
 
-OM参考.md: 包含 ADD APN 命令定义、参数表格、代码示例、注意事项
-基础知识.md: 包含 5G 概念介绍（与 UNC 版本有重复内容）
-UNC OM参考.md: 包含类似命令（可产生 product_variant）
+Run: `python -m knowledge_mining.mining.jobs.run --input cloud_core_coldstart_md/ --db .dev/test.sqlite`
 
-**Step 2: 运行端到端测试**
+验证：
+- manifest.jsonl 被正确读取
+- 每个 doc 的 source_type, document_type, scope_json 正确
+- L0 segments 包含正确的 block_type 和 section_role
+- L1 去重归并正确
+- L2 mapping 正确
 
-Run: `python -m knowledge_mining.mining.jobs.run --input knowledge_assets/samples/test_corpus/ --db .dev/test.sqlite`
+**Step 2: 补充边界测试**
 
-验证:
-- L0 segments 数量合理
-- 5G 概念在不同文档中产生归并（L1 < L0）
-- variant 检测正确
+创建合成测试覆盖：
+1. 无 manifest 的纯 Markdown 目录
+2. 无 frontmatter、无产品/网元的专家文档
+3. 带 HTML table 的 Markdown
+4. manifest 中无 nf 字段的文档
 
 **Step 3: 运行全量测试**
 
@@ -974,8 +683,8 @@ Expected: 全部 passed
 **Step 4: Commit**
 
 ```bash
-git add knowledge_assets/samples/test_corpus/ knowledge_mining/
-git commit -m "[claude-mining]: complete M1 mining pipeline with test corpus"
+git add knowledge_mining/
+git commit -m "[claude-mining]: complete M1 mining pipeline v1.1 with real corpus"
 ```
 
 ---
@@ -983,9 +692,12 @@ git commit -m "[claude-mining]: complete M1 mining pipeline with test corpus"
 ## 验证清单
 
 - [ ] `python -m pytest knowledge_mining/tests/ -v` 全部通过
-- [ ] 合成 Markdown 样例能跑通完整 pipeline
-- [ ] L0 每个 segment 有 section_path, raw_text, content_hash
+- [ ] cloud_core_coldstart_md 样例能跑通完整 pipeline（manifest 驱动）
+- [ ] 无 manifest 的纯 Markdown 目录也能导入
+- [ ] L0 每个 segment 有 section_path, raw_text, content_hash, block_type, section_role
+- [ ] HTML table 保留为 block_type="html_table"，不丢失
 - [ ] L1 去重正确，重复概念只生成一个 canonical segment
 - [ ] L2 能表达 exact_duplicate / version_variant / product_variant
-- [ ] SQLite staging publish version 可查询
+- [ ] 专家文档不需要 product/version/NE 也能正确入库
+- [ ] SQLite schema 来源于共享 `001_asset_core.sqlite.sql`
 - [ ] 不依赖 `agent_serving` 代码
