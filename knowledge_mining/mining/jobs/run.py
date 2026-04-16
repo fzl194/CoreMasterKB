@@ -40,7 +40,7 @@ def run_pipeline(input_path: Path, db_path: Path) -> dict:
     # Step 5: Publish
     source_type = "folder_scan"
     if docs[0].manifest_meta:
-        source_type = docs[0].manifest_meta.get("source_type", "folder_scan")
+        source_type = _map_source_type(docs[0].manifest_meta.get("source_type", "folder_scan"))
 
     publish(
         profiles, all_segments, canonicals, mappings,
@@ -56,6 +56,26 @@ def run_pipeline(input_path: Path, db_path: Path) -> dict:
         "canonicals": len(canonicals),
         "mappings": len(mappings),
     }
+
+
+# Valid source types from schema
+_VALID_SOURCE_TYPES = {
+    "manual_upload", "folder_scan", "api_import", "productdoc_export",
+    "official_vendor", "expert_authored", "user_import",
+    "synthetic_coldstart", "other",
+}
+
+# Mapping for known upstream values not in schema
+_SOURCE_TYPE_ALIASES = {
+    "user_reference": "official_vendor",
+}
+
+
+def _map_source_type(raw: str) -> str:
+    """Map source_type to a valid schema value."""
+    if raw in _VALID_SOURCE_TYPES:
+        return raw
+    return _SOURCE_TYPE_ALIASES.get(raw, "other")
 
 
 def main() -> None:

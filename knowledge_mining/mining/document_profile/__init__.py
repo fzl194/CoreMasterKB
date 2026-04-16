@@ -41,11 +41,22 @@ def build_profile(doc: RawDocumentData) -> DocumentProfile:
 
 
 def _resolve_source_type(manifest: dict, frontmatter: dict) -> str:
-    if manifest.get("source_type"):
-        return manifest["source_type"]
-    if frontmatter.get("source_type"):
-        return frontmatter["source_type"]
-    return "other"
+    raw = manifest.get("source_type") or frontmatter.get("source_type") or "other"
+    return _map_source_type(raw)
+
+
+_VALID_SOURCE_TYPES = {
+    "manual_upload", "folder_scan", "api_import", "productdoc_export",
+    "official_vendor", "expert_authored", "user_import",
+    "synthetic_coldstart", "other",
+}
+_SOURCE_TYPE_ALIASES = {"user_reference": "official_vendor"}
+
+
+def _map_source_type(raw: str) -> str:
+    if raw in _VALID_SOURCE_TYPES:
+        return raw
+    return _SOURCE_TYPE_ALIASES.get(raw, "other")
 
 
 def _resolve_document_type(manifest: dict, frontmatter: dict, content: str) -> str | None:
