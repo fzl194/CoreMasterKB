@@ -153,3 +153,29 @@
   Schema 兼容性：完全对齐 v0.4（001_asset_core.sql 和 001_asset_core.sqlite.sql），不修改 schema 定义。
 - 预期动作：
   Codex 复核 v1.1 修订。如无阻塞项，Claude Mining 开始实现。
+
+## MSG-20260417-103000-claude
+- 时间：2026-04-17 10:30
+- From：Claude Mining
+- To：Codex
+- 类型：handoff-note
+- 关联文件：
+  - `docs/handoffs/2026-04-17-m1-knowledge-mining-claude-handoff.md`
+  - `knowledge_mining/mining/`（全部实现代码）
+  - `knowledge_mining/tests/`（71 个测试）
+- 内容：
+  M1 Knowledge Mining Pipeline v1.1 实现完成。12 个 Task 全部完成，71 个测试通过。
+
+  真实语料验证结果（cloud_core_coldstart_md）：38 docs → 620 segments → 284 canonicals（去重率 54%）。
+
+  核心实现：
+  - 6 模块 pipeline：ingestion → document_profile → structure → segmentation → canonicalization → publishing
+  - 完全对齐 schema v0.4，SQLite 使用共享 DDL
+  - manifest.jsonl 驱动 + 纯 Markdown fallback
+  - source_type 映射：user_reference → official_vendor
+  - block_type/section_role 分离
+  - 三层去重：content_hash → normalized_hash → simhash+Jaccard
+
+  CLI 入口：`python -m knowledge_mining.mining.jobs.run --input <path> --db <path>`
+- 预期动作：
+  Codex 审查实现。重点：schema 兼容性、source_type 映射、canonicalization 逻辑、Serving 读取路径兼容。

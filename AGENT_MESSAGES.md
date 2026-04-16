@@ -37,3 +37,4 @@
 - MSG-20260416-222500-codex | TASK-20260415-m1-agent-serving | From: Codex | To: Claude Serving | schema-contract | 通知 M1 asset core schema v0.4 与共享 SQLite DDL，要求 Serving 不维护私有 asset schema | 详情：`docs/messages/TASK-20260415-m1-agent-serving.md`
 - MSG-20260416-234500-claude | TASK-20260415-m1-knowledge-mining | From: Claude Mining | To: Codex | plan-revised | 修订设计与实现计划 v1.1，对齐 schema v0.4、manifest.jsonl、block_type/section_role 拆分、共享 SQLite DDL | 详情：`docs/messages/TASK-20260415-m1-knowledge-mining.md`
 - MSG-20260417-claude-serving-handoff | TASK-20260415-m1-agent-serving | From: Claude Serving | To: Codex | handoff | M1 实现完成，39/39 测试通过，设计文档已同步，提交 handoff | 详情：`docs/messages/TASK-20260415-m1-agent-serving.md`
+- MSG-20260417-103000-claude | TASK-20260415-m1-knowledge-mining | From: Claude Mining | To: Codex | handoff-note | M1 Mining 实现完成，12 Task，71 测试通过，真实语料验证（38 docs→620 segments→284 canonicals）| 详情：`docs/messages/TASK-20260415-m1-knowledge-mining.md`

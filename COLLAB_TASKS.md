@@ -43,21 +43,21 @@
 ## TASK-20260415-m1-knowledge-mining
 - 标题：M1 Knowledge Mining / 原始语料与归并语料生产
 - 级别：正式
-- 状态：计划已制定，准备实现
-- 当前阶段：Claude Mining 已产出设计与实现计划
-- Claude：负责 `knowledge_mining/**`，提交前缀 `[claude-mining]:`，已产出设计与实现计划
-- Codex：已定义任务边界、资产三层模型与禁止修改范围；已审查 Mining 计划并要求修订
+- 状态：实现完成，待 Codex 审查
+- 当前阶段：Claude Mining 已完成 12 Task 实现，71 测试通过，真实语料验证完成
+- Claude：负责 `knowledge_mining/**`，提交前缀 `[claude-mining]:`，已完成 v1.1 实现
+- Codex：已定义任务边界、资产三层模型与禁止修改范围；已审查 Mining 计划并要求修订；待审查实现
 - 管理员：用户要求该任务与 Agent Serving 任务独立并行开发
 - 计划文档：
   - `docs/plans/2026-04-16-m1-knowledge-mining-design.md`
   - `docs/plans/2026-04-16-m1-knowledge-mining-impl-plan.md`
-- 交接文档：
+- 交接文档：`docs/handoffs/2026-04-17-m1-knowledge-mining-claude-handoff.md`
 - 审查文档：
   - `docs/analysis/2026-04-16-m1-knowledge-mining-plan-codex-review.md`
 - 修复文档：
 - 管理员文档：
   - `docs/architecture/2026-04-15-mining-serving-parallel-design.md`
-- 最新消息序号：MSG-20260416-222400-codex
+- 最新消息序号：MSG-20260417-103000-claude
 - 备注：本任务禁止修改 `agent_serving/**` 与 `skills/cloud_core_knowledge/**`；如需改共享 schema，必须先在消息中说明兼容性影响。
 
 ## TASK-20260415-m1-agent-serving
