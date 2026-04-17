@@ -22,6 +22,7 @@ questions:
     expected_objects: ["ADD APN", "POOLNAME"]
     expected_roles: ["parameter"]
     expected_behavior: "识别同一 scope 下存在冲突候选，不应强行给出唯一结论。"
+    fixture_note: "当前预构建 DB 受限于 Mining 仍缺少文件级 scope/conflict 识别，可能尚未产生 conflict_candidate；Serving 应按目标契约保留 conflicts 输出能力。"
 
   - id: Q-M1-004
     question: "V100R023C20 的 ADD APN 和 V100R023C10 有什么差异？"
@@ -29,6 +30,7 @@ questions:
     expected_objects: ["ADD APN", "V100R023C20", "V100R023C10"]
     expected_roles: ["parameter", "note"]
     expected_behavior: "通过 scope_variant 下钻，说明版本维度差异。"
+    fixture_note: "当前预构建 DB 受限于 Mining 仍缺少文件级 scope 继承，可能尚未产生 scope_variant；Serving 应按目标契约保留 variants/gaps 输出能力。"
 
   - id: Q-M1-005
     question: "新增 ims APN 的配置示例是什么？"
@@ -106,4 +108,18 @@ questions:
     expected_objects: ["ADD APN", "APN"]
     expected_roles: []
     expected_behavior: "通过 L2 显示 primary、exact_duplicate、normalized_duplicate、scope_variant 和 conflict_candidate。"
+    fixture_note: "当前预构建 DB 已可验证 primary、exact_duplicate、near_duplicate；normalized_duplicate、scope_variant、conflict_candidate 取决于 Mining 后续归并增强。"
 
+  - id: Q-M1-016
+    question: "ADD APN 的参数表有哪些列，每行参数分别是什么？"
+    intent: structured_evidence_lookup
+    expected_objects: ["ADD APN", "参数说明"]
+    expected_roles: ["parameter"]
+    expected_behavior: "返回 table 类型 evidence，并保留 structure_json 中的 columns/rows，不能只返回扁平文本。"
+
+  - id: Q-M1-017
+    question: "ADD APN 参数说明来自哪个文件、哪个章节？"
+    intent: source_drilldown
+    expected_objects: ["ADD APN", "参数说明"]
+    expected_roles: ["parameter"]
+    expected_behavior: "返回 raw_document.relative_path、section_path/section_title 和 source_offsets_json，支持下钻到原始来源。"
