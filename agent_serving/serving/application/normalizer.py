@@ -3,11 +3,24 @@
 Outputs a generic NormalizedQuery with entities[] + scope{} + intent.
 Commands are just one entity type among many (command, feature, term, alarm).
 build_plan() converts normalized query to a QueryPlan for repository use.
+
+Domain patterns (products, NEs, versions, intent keywords) are loaded from
+normalizer_config module, which supports YAML override via env var.
 """
 from __future__ import annotations
 
 import re
 
+from agent_serving.serving.schemas.constants import (
+    INTENT_COMMAND_USAGE,
+    INTENT_CONCEPT_LOOKUP,
+    INTENT_GENERAL,
+    INTENT_PROCEDURE,
+    INTENT_TROUBLESHOOT,
+    POLICY_FLAG,
+    POLICY_FLAG_NOT_ANSWER,
+    POLICY_REQUIRE_DISAMBIGUATION,
+)
 from agent_serving.serving.schemas.models import (
     EntityRef,
     EvidenceBudget,
@@ -16,38 +29,49 @@ from agent_serving.serving.schemas.models import (
     QueryPlan,
     QueryScope,
 )
-
-# --- Rule-based extraction patterns ---
-
-OP_MAP = {
-    "新增": "ADD", "添加": "ADD", "创建": "ADD",
-    "修改": "MOD", "更改": "MOD", "编辑": "MOD",
-    "删除": "DEL", "移除": "DEL",
-    "查询": "SHOW", "查看": "DSP", "显示": "LST",
-    "设置": "SET", "配置": "SET",
-}
-
-COMMAND_RE = re.compile(
-    r"\b(ADD|MOD|DEL|SET|SHOW|LST|DSP)\s+([A-Z][A-Z0-9_]*)\b", re.IGNORECASE
+from agent_serving.serving.application.normalizer_config import (
+    DEFAULT_INTENT_COMMAND_KEYWORDS,
+    DEFAULT_INTENT_CONCEPT_KEYWORDS,
+    DEFAULT_INTENT_PROCEDURE_KEYWORDS,
+    DEFAULT_INTENT_TROUBLESHOOT_KEYWORDS,
+    DEFAULT_INTENT_ROLE_MAP,
+    DEFAULT_OP_MAP,
+    build_command_regex,
+    build_ne_regex,
+    build_product_regex,
+    build_version_regex,
+    load_config,
 )
-
-PRODUCT_RE = re.compile(
-    r"\b(UDG|UNC|CloudCore)\b", re.IGNORECASE
-)
-
-VERSION_RE = re.compile(r"\b(V\d{3}R\d{3}(C\d{2})?)\b")
-
-NE_RE = re.compile(
-    r"\b(AMF|SMF|UPF|UDM|PCF|NRF|AUSF|BSF|NSSF|SCP|UDSF|UDR)\b", re.IGNORECASE
-)
-
-INTENT_COMMAND_KEYWORDS = {"命令", "用法", "参数", "格式", "语法", "怎么写", "如何配置"}
-INTENT_TROUBLESHOOT_KEYWORDS = {"故障", "排查", "告警", "错误", "异常", "处理"}
-INTENT_CONCEPT_KEYWORDS = {"是什么", "什么是", "概念", "介绍", "概述", "原理"}
-INTENT_PROCEDURE_KEYWORDS = {"步骤", "流程", "操作", "怎么做", "如何操作"}
 
 
 class QueryNormalizer:
+    """Rule-based query normalizer with configurable domain patterns."""
+
+    def __init__(self) -> None:
+        cfg = load_config()
+        self._command_re = build_command_regex()
+        self._product_re = build_product_regex(cfg.get("products"))
+        self._version_re = build_version_regex(cfg.get("version_pattern"))
+        self._ne_re = build_ne_regex(cfg.get("network_elements"))
+        self._op_map: dict[str, str] = cfg.get("op_map", DEFAULT_OP_MAP)
+
+        intent_kw = cfg.get("intent_keywords", {})
+        self._intent_command_keywords: set[str] = set(
+            intent_kw.get("command", DEFAULT_INTENT_COMMAND_KEYWORDS)
+        )
+        self._intent_troubleshoot_keywords: set[str] = set(
+            intent_kw.get("troubleshoot", DEFAULT_INTENT_TROUBLESHOOT_KEYWORDS)
+        )
+        self._intent_concept_keywords: set[str] = set(
+            intent_kw.get("concept", DEFAULT_INTENT_CONCEPT_KEYWORDS)
+        )
+        self._intent_procedure_keywords: set[str] = set(
+            intent_kw.get("procedure", DEFAULT_INTENT_PROCEDURE_KEYWORDS)
+        )
+        self._intent_role_map: dict[str, list[str]] = cfg.get(
+            "intent_role_map", DEFAULT_INTENT_ROLE_MAP
+        )
+
     def normalize(self, query: str) -> NormalizedQuery:
         entities = self._extract_entities(query)
         scope = self._extract_scope(query)
@@ -69,7 +93,6 @@ class QueryNormalizer:
         entities: list[EntityRef] = []
         seen: set[str] = set()
 
-        # Extract command entities
         cmd = self._extract_command(query)
         if cmd:
             key = f"command:{cmd}"
@@ -80,11 +103,11 @@ class QueryNormalizer:
         return entities
 
     def _extract_command(self, query: str) -> str | None:
-        match = COMMAND_RE.search(query)
+        match = self._command_re.search(query)
         if match:
             return f"{match.group(1).upper()} {match.group(2).upper()}"
 
-        for cn_word, cmd_prefix in OP_MAP.items():
+        for cn_word, cmd_prefix in self._op_map.items():
             if cn_word in query:
                 after = query.split(cn_word, 1)[-1]
                 target_match = re.match(r"\s*([A-Za-z][A-Za-z0-9_]*)", after)
@@ -95,53 +118,49 @@ class QueryNormalizer:
         return None
 
     def _extract_scope(self, query: str) -> QueryScope:
-        products: list[str] = []
+        products: set[str] = set()
         product_versions: list[str] = []
-        network_elements: list[str] = []
+        network_elements: set[str] = set()
 
-        for m in PRODUCT_RE.finditer(query):
-            p = m.group(1).upper()
-            if p not in products:
-                products.append(p)
+        for m in self._product_re.finditer(query):
+            products.add(m.group(1).upper())
 
-        v = VERSION_RE.search(query)
+        v = self._version_re.search(query)
         if v:
             product_versions.append(v.group(1))
 
-        for m in NE_RE.finditer(query):
-            ne = m.group(1).upper()
-            if ne not in network_elements:
-                network_elements.append(ne)
+        for m in self._ne_re.finditer(query):
+            network_elements.add(m.group(1).upper())
 
         return QueryScope(
-            products=products,
+            products=sorted(products),
             product_versions=product_versions,
-            network_elements=network_elements,
+            network_elements=sorted(network_elements),
         )
 
     def _detect_intent(self, query: str, entities: list[EntityRef]) -> str:
         has_command = any(e.type == "command" for e in entities)
 
         if has_command:
-            return "command_usage"
+            return INTENT_COMMAND_USAGE
 
-        for kw in INTENT_TROUBLESHOOT_KEYWORDS:
+        for kw in self._intent_troubleshoot_keywords:
             if kw in query:
-                return "troubleshooting"
+                return INTENT_TROUBLESHOOT
 
-        for kw in INTENT_PROCEDURE_KEYWORDS:
+        for kw in self._intent_procedure_keywords:
             if kw in query:
-                return "procedure"
+                return INTENT_PROCEDURE
 
-        for kw in INTENT_CONCEPT_KEYWORDS:
+        for kw in self._intent_concept_keywords:
             if kw in query:
-                return "concept_lookup"
+                return INTENT_CONCEPT_LOOKUP
 
-        return "general"
+        return INTENT_GENERAL
 
     def _extract_keywords(self, query: str) -> list[str]:
         cleaned = query
-        for pattern in [COMMAND_RE, PRODUCT_RE, VERSION_RE, NE_RE]:
+        for pattern in [self._command_re, self._product_re, self._version_re, self._ne_re]:
             cleaned = pattern.sub("", cleaned)
         tokens = [t for t in re.split(r"[\s,，、？?。.！!]+", cleaned) if len(t) > 0]
         return tokens
@@ -150,7 +169,7 @@ class QueryNormalizer:
         self, entities: list[EntityRef], scope: QueryScope, intent: str
     ) -> list[str]:
         missing: list[str] = []
-        if intent == "command_usage":
+        if intent == INTENT_COMMAND_USAGE:
             if not scope.products:
                 missing.append("product")
             if scope.products and not scope.product_versions:
@@ -158,15 +177,7 @@ class QueryNormalizer:
         return missing
 
     def _desired_roles_for_intent(self, intent: str) -> list[str]:
-        role_map: dict[str, list[str]] = {
-            "command_usage": ["parameter", "example", "procedure_step"],
-            "troubleshooting": ["troubleshooting_step", "alarm", "constraint"],
-            "concept_lookup": ["concept", "note"],
-            "procedure": ["procedure_step", "parameter", "example"],
-            "comparison": ["concept", "parameter", "constraint"],
-            "general": [],
-        }
-        return role_map.get(intent, [])
+        return list(self._intent_role_map.get(intent, []))
 
 
 def build_plan(normalized: NormalizedQuery) -> QueryPlan:
@@ -175,9 +186,9 @@ def build_plan(normalized: NormalizedQuery) -> QueryPlan:
     M1 uses simple rule-based planning. Future M2+ can replace this
     with LLM planner, ontology expansion, or multi-agent orchestration.
     """
-    variant_policy = "flag"
-    if normalized.missing_constraints and normalized.intent == "command_usage":
-        variant_policy = "require_disambiguation"
+    variant_policy = POLICY_FLAG
+    if normalized.missing_constraints and normalized.intent == INTENT_COMMAND_USAGE:
+        variant_policy = POLICY_REQUIRE_DISAMBIGUATION
 
     return QueryPlan(
         intent=normalized.intent,
@@ -196,7 +207,7 @@ def build_plan(normalized: NormalizedQuery) -> QueryPlan:
         semantic_role_preferences=list(normalized.desired_semantic_roles),
         block_type_preferences=list(normalized.desired_block_types),
         variant_policy=variant_policy,
-        conflict_policy="flag_not_answer",
+        conflict_policy=POLICY_FLAG_NOT_ANSWER,
         evidence_budget=EvidenceBudget(canonical_limit=10, raw_per_canonical=3),
         expansion=ExpansionConfig(use_ontology=False, max_hops=0),
         keywords=list(normalized.keywords),

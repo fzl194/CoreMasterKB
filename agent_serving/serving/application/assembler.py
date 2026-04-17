@@ -183,10 +183,16 @@ class EvidenceAssembler:
 
         if has_variants_hit and normalized.missing_constraints:
             if "product" in normalized.missing_constraints:
+                # Derive product options from actual variant scopes, not hardcoded list
+                product_options = sorted({
+                    p
+                    for v in variants
+                    for p in _parse_scope(v.get("doc_scope_json", "{}")).products
+                }) if variants else []
                 gaps.append(Gap(
                     field="product",
                     reason="该知识在不同产品上有差异，需要指定产品",
-                    suggested_options=["UDG", "UNC", "UPF"],
+                    suggested_options=product_options,
                 ))
             if "product_version" in normalized.missing_constraints:
                 gaps.append(Gap(

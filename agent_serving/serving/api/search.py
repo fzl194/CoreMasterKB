@@ -5,6 +5,8 @@ Explicit request scope/entities take priority over normalizer extraction.
 """
 from __future__ import annotations
 
+import asyncio
+
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from agent_serving.serving.schemas.models import (
@@ -30,17 +32,20 @@ def get_repo(request: Request) -> AssetRepository:
 def _merge_explicit_overrides(
     normalized: NormalizedQuery, req_scope: QueryScope | None, req_entities: list[EntityRef] | None,
 ) -> NormalizedQuery:
-    """Merge explicit request scope/entities over normalizer extraction."""
+    """Merge explicit request scope/entities over normalizer extraction.
+
+    Returns a new NormalizedQuery instance — never mutates the input.
+    """
+    updates: dict = {}
     if req_scope:
-        # Explicit scope overrides normalizer scope
-        normalized.scope = req_scope
-        normalized.missing_constraints = []
-
+        updates["scope"] = req_scope
+        updates["missing_constraints"] = []
     if req_entities:
-        # Explicit entities override normalizer entities
-        normalized.entities = req_entities
+        updates["entities"] = req_entities
 
-    return normalized
+    if not updates:
+        return normalized
+    return normalized.model_copy(update=updates)
 
 
 async def _execute_plan(
@@ -76,15 +81,15 @@ async def _execute_plan(
         )
         canonical_hits = await repo.search_canonical(keyword_plan, pv_id)
 
-    # 3. Drill down for each canonical hit
-    drill_results: list[tuple[list[dict], list[dict], list[dict]]] = []
-    for canon in canonical_hits:
-        evidence, variants, conflicts = await repo.drill_down(
+    # 3. Drill down for each canonical hit (concurrent)
+    drill_results = await asyncio.gather(*[
+        repo.drill_down(
             canonical_segment_id=canon["id"],
             plan=plan,
             pv_id=pv_id,
         )
-        drill_results.append((evidence, variants, conflicts))
+        for canon in canonical_hits
+    ])
 
     # 4. Get unparsed documents for source audit
     unparsed = await repo.get_unparsed_documents(pv_id)
@@ -131,8 +136,10 @@ async def command_usage(
     if not has_command:
         raise HTTPException(status_code=400, detail="Could not identify a command in the query")
 
-    normalized.intent = "command_usage"
-    normalized.desired_semantic_roles = ["parameter", "example", "procedure_step"]
+    normalized = normalized.model_copy(update={
+        "intent": "command_usage",
+        "desired_semantic_roles": ["parameter", "example", "procedure_step"],
+    })
 
     plan = build_plan(normalized)
     return await _execute_plan(request.query, normalized, plan, repo)

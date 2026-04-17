@@ -82,16 +82,17 @@ class AssetRepository:
         if entity_names:
             like_clauses = " OR ".join("cs.search_text LIKE ?" for _ in entity_names)
             conditions.append(f"({like_clauses})")
-            params.extend(f"%{name}%" for name in entity_names)
+            params.extend(f"%{self._escape_like(name)}%" for name in entity_names)
         elif plan.keywords:
             like_clauses = " OR ".join("cs.search_text LIKE ?" for _ in plan.keywords)
             conditions.append(f"({like_clauses})")
-            params.extend(f"%{kw}%" for kw in plan.keywords)
+            params.extend(f"%{self._escape_like(kw)}%" for kw in plan.keywords)
         else:
             return []
 
         query = f"SELECT * FROM asset_canonical_segments cs WHERE {' AND '.join(conditions)}"
-        query += f" LIMIT {plan.evidence_budget.canonical_limit}"
+        query += " LIMIT ?"
+        params.append(plan.evidence_budget.canonical_limit)
 
         cursor = await self._db.execute(query, params)
         rows = await cursor.fetchall()
@@ -203,6 +204,11 @@ class AssetRepository:
         return [dict(row) for row in await cursor.fetchall()]
 
     # --- Private helpers ---
+
+    @staticmethod
+    def _escape_like(value: str) -> str:
+        """Escape LIKE special characters (%, _) in user-controlled values."""
+        return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
     def _filter_by_entities(
         self, results: list[dict], entity_constraints: list,
