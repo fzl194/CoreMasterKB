@@ -43,21 +43,24 @@
 ## TASK-20260415-m1-knowledge-mining
 - 标题：M1 Knowledge Mining / 原始语料与归并语料生产
 - 级别：正式
-- 状态：实现完成，待 Codex 审查
-- 当前阶段：Claude Mining 已完成 12 Task 实现，71 测试通过，真实语料验证完成
-- Claude：负责 `knowledge_mining/**`，提交前缀 `[claude-mining]:`，已完成 v1.1 实现
-- Codex：已定义任务边界、资产三层模型与禁止修改范围；已发布 schema v0.5 修订契约与 Mining 实现修订要求；待审查后续修订实现
+- 状态：v0.5 修订完成，待 Codex 审查
+- 当前阶段：Claude Mining 已完成 v0.5 schema 全面修订，184 测试通过，待管理员提供正式测试文件夹验收
+- Claude：负责 `knowledge_mining/**`，提交前缀 `[claude]:`，已完成 v0.5 修订（Plugin 架构 + 10 模块重写）
+- Codex：已定义任务边界、资产三层模型与禁止修改范围；已发布 schema v0.5 修订契约与 Mining 实现修订要求；待审查 v0.5 修订实现
 - 管理员：用户要求该任务与 Agent Serving 任务独立并行开发
 - 计划文档：
   - `docs/plans/2026-04-16-m1-knowledge-mining-design.md`
   - `docs/plans/2026-04-16-m1-knowledge-mining-impl-plan.md`
-- 交接文档：`docs/handoffs/2026-04-17-m1-knowledge-mining-claude-handoff.md`
+  - `docs/plans/2026-04-17-m1-knowledge-mining-v05-revision-plan.md`（v0.5 修订计划）
+- 交接文档：
+  - `docs/handoffs/2026-04-17-m1-knowledge-mining-claude-handoff.md`（v1.1 handoff）
+  - `docs/handoffs/2026-04-17-m1-knowledge-mining-claude-v05-revision.md`（v0.5 修订 handoff，待写）
 - 审查文档：
   - `docs/analysis/2026-04-16-m1-knowledge-mining-plan-codex-review.md`
 - 修复文档：
 - 管理员文档：
   - `docs/architecture/2026-04-15-mining-serving-parallel-design.md`
-- 最新消息序号：MSG-20260417-113900-codex
+- 最新消息序号：MSG-20260417-163000-claude
 - 备注：本任务禁止修改 `agent_serving/**` 与 `skills/cloud_core_knowledge/**`；如需改共享 schema，必须先在消息中说明兼容性影响。
 
 ## TASK-20260415-m1-agent-serving
