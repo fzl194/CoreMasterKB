@@ -247,6 +247,13 @@ def publish(
         }
 
     except Exception as e:
+        # Rollback first to preserve old active version (if activation had started)
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        # In a separate transaction, mark the new version as failed
+        # without archiving any existing active version
         try:
             if pv_id is not None:
                 db.fail_version(conn, pv_id, str(e))

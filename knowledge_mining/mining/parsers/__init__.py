@@ -61,15 +61,21 @@ class PlainTextParser:
             return None
 
         blocks: list[ContentBlock] = []
-        for para_text in paragraphs:
+        for para_text, line_start, line_end in paragraphs:
             tc = _token_count(para_text)
             if tc <= self.chunk_size:
-                blocks.append(ContentBlock(block_type="paragraph", text=para_text))
+                blocks.append(ContentBlock(
+                    block_type="paragraph", text=para_text,
+                    line_start=line_start, line_end=line_end,
+                ))
             else:
                 # Split long paragraph by token-boundary windows on original text
                 chunks = _split_long_text(para_text, self.chunk_size, self.chunk_overlap)
                 for chunk in chunks:
-                    blocks.append(ContentBlock(block_type="paragraph", text=chunk))
+                    blocks.append(ContentBlock(
+                        block_type="paragraph", text=chunk,
+                        line_start=line_start, line_end=line_end,
+                    ))
 
         return SectionNode(
             title=file_name,
@@ -103,19 +109,27 @@ def create_parser(file_type: str, **kwargs: Any) -> DocumentParser:
         return PassthroughParser()
 
 
-def _split_paragraphs(text: str) -> list[str]:
-    """Split text by blank lines into paragraphs, preserving original text."""
-    paragraphs = []
+def _split_paragraphs(text: str) -> list[tuple[str, int, int]]:
+    """Split text by blank lines into paragraphs, preserving original text.
+
+    Returns list of (text, line_start, line_end) tuples with 0-based line numbers.
+    """
+    paragraphs: list[tuple[str, int, int]] = []
     current_lines: list[str] = []
-    for line in text.split("\n"):
+    line_start: int | None = None
+    lines = text.split("\n")
+    for line_idx, line in enumerate(lines):
         if line.strip() == "":
             if current_lines:
-                paragraphs.append("\n".join(current_lines))
+                paragraphs.append(("\n".join(current_lines), line_start, line_idx))
                 current_lines = []
+                line_start = None
         else:
+            if line_start is None:
+                line_start = line_idx
             current_lines.append(line)
     if current_lines:
-        paragraphs.append("\n".join(current_lines))
+        paragraphs.append(("\n".join(current_lines), line_start, len(lines)))
     return paragraphs
 
 

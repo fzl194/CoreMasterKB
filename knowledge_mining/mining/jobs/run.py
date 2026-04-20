@@ -12,14 +12,13 @@ from typing import Any
 
 from knowledge_mining.mining.canonicalization import canonicalize
 from knowledge_mining.mining.document_profile import build_profile
-from knowledge_mining.mining.extractors import (
-    EntityExtractor,
-    NoOpEntityExtractor,
-    NoOpSegmentEnricher,
-    RoleClassifier,
-    DefaultRoleClassifier,
-    SegmentEnricher,
-)
+from knowledge_mining.mining.extractors import DefaultRoleClassifier
+from knowledge_mining.mining.extractors import EntityExtractor
+from knowledge_mining.mining.extractors import NoOpSegmentEnricher
+from knowledge_mining.mining.extractors import RoleClassifier
+from knowledge_mining.mining.extractors import SegmentEnricher
+import knowledge_mining.mining.extractors as _extractors_mod
+RuleBasedEntityExtractor = _extractors_mod.RuleBasedEntityExtractor
 from knowledge_mining.mining.ingestion import ingest_directory
 from knowledge_mining.mining.models import BatchParams, RawSegmentData
 from knowledge_mining.mining.parsers import create_parser
@@ -42,7 +41,7 @@ def run_pipeline(
 
     Returns a summary dict with discovery/parse/canonical/publish statistics.
     """
-    extractor = entity_extractor or NoOpEntityExtractor()
+    extractor = entity_extractor or RuleBasedEntityExtractor()
     classifier = role_classifier or DefaultRoleClassifier()
     enricher = segment_enricher or NoOpSegmentEnricher()
 

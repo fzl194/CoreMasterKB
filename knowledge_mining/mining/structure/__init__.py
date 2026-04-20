@@ -30,6 +30,7 @@ def _tokens_to_blocks(tokens: list) -> list[ContentBlock]:
     """Convert markdown-it tokens into ContentBlock list with structure and line info."""
     blocks: list[ContentBlock] = []
     i = 0
+    pending_paragraph_map: tuple[int | None, int | None] | None = None
     while i < len(tokens):
         tok = tokens[i]
 
@@ -65,7 +66,6 @@ def _tokens_to_blocks(tokens: list) -> list[ContentBlock]:
 
         elif tok.type in ("bullet_list_open", "ordered_list_open"):
             ordered = tok.type == "ordered_list_open"
-            close_type = tok.type.replace("open", "close")
             items: list[str] = []
             line_start = tok.map[0] if tok.map else None
             j = i + 1
@@ -73,7 +73,7 @@ def _tokens_to_blocks(tokens: list) -> list[ContentBlock]:
             while j < len(tokens):
                 if tokens[j].type in ("bullet_list_open", "ordered_list_open"):
                     depth += 1
-                elif tokens[j].type == close_type:
+                elif tokens[j].type in ("bullet_list_close", "ordered_list_close"):
                     depth -= 1
                     if depth == 0:
                         break
@@ -123,10 +123,21 @@ def _tokens_to_blocks(tokens: list) -> list[ContentBlock]:
                     line_start=line_start, line_end=line_end,
                 ))
 
+        elif tok.type == "paragraph_open":
+            pending_paragraph_map = (
+                tok.map[0] if tok.map else None,
+                tok.map[1] if tok.map else None,
+            )
+
         elif tok.type == "inline":
             text = tok.content.strip()
             if text:
-                blocks.append(ContentBlock(block_type="paragraph", text=text))
+                p_start, p_end = (pending_paragraph_map or (None, None))
+                blocks.append(ContentBlock(
+                    block_type="paragraph", text=text,
+                    line_start=p_start, line_end=p_end,
+                ))
+            pending_paragraph_map = None
 
         i += 1
 
@@ -316,28 +327,33 @@ def _split_sub_sections(
     content_blocks: list[ContentBlock],
     parent_level: int,
 ) -> list[list[ContentBlock]]:
-    """Split content blocks into sub-section groups at parent_level + 1.
+    """Split content blocks into sub-section groups.
 
-    Each group starts with a heading at parent_level + 1 and contains
-    all blocks until the next heading at the same or lower level.
-    Headings at levels <= parent_level are not included (shouldn't occur here).
+    Handles skipped heading levels (e.g., H1 → H3). Any heading with
+    level > parent_level that is NOT inside a deeper sub-section starts
+    a new group. Deeper headings belong to the current group.
     """
     result: list[list[ContentBlock]] = []
     current: list[ContentBlock] = []
-    target_level = parent_level + 1
+    # Track the heading level that opened the current sub-section group.
+    # None means we're in the "direct blocks" preamble (before any sub-heading).
+    current_group_level: int | None = None
 
     for block in content_blocks:
         if block.block_type == "heading":
             block_level = block.level or 1
-            if block_level == target_level:
-                # Start a new sub-section at the target level
+            if block_level <= parent_level:
+                # Shouldn't happen (parent's own level), skip
+                continue
+            if current_group_level is None or block_level <= current_group_level:
+                # Start a new sub-section group
                 if current:
                     result.append(current)
                 current = [block]
-            elif block_level > target_level:
+                current_group_level = block_level
+            else:
                 # Deeper heading — belongs to current sub-section
                 current.append(block)
-            # block_level < target_level: shouldn't happen, skip
         else:
             current.append(block)
 

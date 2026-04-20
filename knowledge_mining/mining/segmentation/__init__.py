@@ -77,7 +77,7 @@ def _walk_sections(
     block_index = 0
 
     for block in node.blocks:
-        if block.block_type in ("table", "html_table", "code"):
+        if block.block_type in ("table", "html_table", "code", "list", "blockquote"):
             # Flush pending grouped blocks
             if current_group:
                 segments.append(
@@ -132,7 +132,9 @@ def _make_segment(
         raw_text, section.title, block_type, context,
     )
 
-    entity_refs = extractor.extract(raw_text, context)
+    structure_json = _extract_structure_info(blocks)
+
+    entity_refs = extractor.extract(raw_text, {**context, "structure": structure_json})
 
     # Build source_offsets_json with line info from blocks
     line_start = None
@@ -166,7 +168,7 @@ def _make_segment(
         content_hash=content_hash(raw_text),
         normalized_hash=normalized_hash(raw_text),
         token_count=token_count(raw_text),
-        structure_json=_extract_structure_info(blocks),
+        structure_json=structure_json,
         source_offsets_json=source_offsets,
         entity_refs_json=entity_refs,
         metadata_json={},
