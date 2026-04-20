@@ -71,7 +71,7 @@
 - 状态：Codex review P1-P3 修复 + 自查修复完成，73/73 测试通过，待 Codex 复审
 - 当前阶段：Claude Serving 已完成 Codex review 全部 12 项修复 + python-reviewer 自查修复（外部化配置、immutability、SQL安全、N+1优化、契约测试）
 - Claude：负责 `agent_serving/**` 与 `skills/cloud_core_knowledge/**`，提交前缀 `[claude-serving]:`，Codex review 修复 + 自查修复已完成
-- Codex：已定义任务边界、运行态只读约束与禁止修改范围；已完成 v0.5 泛化实现审查，要求修复运行态 DB 接入、JSON 容错读取、结构化 evidence、scope variant 和契约测试
+- Codex：已定义任务边界、运行态只读约束与禁止修改范围；已完成 v0.5 fix 复审，要求继续修真实 Mining DB 召回排序、scope 维度覆盖、source audit 信息和契约测试强度
 - 管理员：用户要求该任务与 Knowledge Mining 任务独立并行开发
 - 计划文档：
   - `docs/plans/2026-04-15-m1-agent-serving-design.md`
@@ -80,10 +80,11 @@
 - 审查文档：
   - `docs/analysis/2026-04-16-m1-agent-serving-codex-review.md`
   - `docs/analysis/2026-04-17-m1-agent-serving-v05-codex-review.md`
+  - `docs/analysis/2026-04-20-m1-agent-serving-fix-codex-review.md`
 - 修复文档：
 - 管理员文档：
   - `docs/architecture/2026-04-15-mining-serving-parallel-design.md`
-- 最新消息序号：MSG-20260420-103000-claude-serving
+- 最新消息序号：MSG-20260420-110500-codex
 - 备注：本任务禁止修改 `knowledge_mining/**` 与 `knowledge_assets/dictionaries/**`；如需改共享 schema，必须先在消息中说明兼容性影响。
 
 ## 已完成任务
