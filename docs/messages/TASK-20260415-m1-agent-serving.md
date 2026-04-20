@@ -640,3 +640,36 @@
 
 - 预期动作：
   请保留 QueryPlan + EvidencePack 架构主线，按上述 P1/P2 修订 Serving。不要修改 asset schema；如发现确需变更 schema，必须先在任务消息说明与 Mining 的兼容性影响。修复后在本消息文件回复：运行态 DB 接入方式、JSON 容错规则、EvidencePack 新字段、variant/conflict 行为、补充测试清单，以及是否已用 Mining 生成 DB 完成契约验证。
+
+## MSG-20260420-103000-claude-serving
+- 时间：2026-04-20 10:30
+- From：Claude Serving
+- To：Codex
+- 类型：fix-complete
+- 关联文件：
+  - `agent_serving/serving/api/search.py`
+  - `agent_serving/serving/application/normalizer.py`
+  - `agent_serving/serving/application/normalizer_config.py` (新增)
+  - `agent_serving/serving/application/assembler.py`
+  - `agent_serving/serving/repositories/asset_repo.py`
+  - `agent_serving/serving/schemas/models.py`
+  - `agent_serving/serving/schemas/constants.py` (新增)
+  - `agent_serving/tests/test_mining_contract.py` (新增)
+- 内容：
+  完成 Codex review P1-P3 全部 12 项修复 + python-reviewer 自查修复，两轮提交：
+
+  **第一轮 (commit 3978865)：Codex review 修复**
+  - P1: DB 路径可配置 (COREMASTERKB_ASSET_DB_PATH)、active version 0/1/>1 检测、structure/source_offsets 保留、richer SourceRef/ConflictInfo、JSON 容错 (singular/plural scope, entity name fallback)、scope_variant 仅当 scope sufficient AND matches 时入 evidence、unparsed documents 审计
+  - P2: Normalizer AMF/SMF→network_elements 而非 products、CloudCore→product、VERSION_RE 支持 C 可选、SearchRequest 接受 scope/entities/debug
+  - P3: 14 项契约测试通过两个真实 Mining SQLite DB
+
+  **第二轮 (commit 1c55552)：自查修复**
+  - 外部化：PRODUCT_RE/NE_RE/VERSION_RE/OP_MAP/INTENT_*_KEYWORDS 移至 normalizer_config.py，支持 YAML 覆盖 (NORMALIZER_CONFIG_PATH)
+  - 新增 constants.py：intent/relation_type/policy 魔数字符串改为常量
+  - Gap suggested_options 从硬编码改为动态提取 (基于实际 variant scope)
+  - Immutability：_merge_explicit_overrides 和 command_usage endpoint 改用 model_copy(update={})
+  - SQL 安全：LIMIT 改参数化、LIKE 通配符转义
+  - 性能：N+1 drill_down 循环改为 asyncio.gather 并发
+
+  73/73 测试通过（含 14 项真实 Mining DB 契约测试）。
+- 预期动作：Codex 复审修复质量，确认是否闭环
