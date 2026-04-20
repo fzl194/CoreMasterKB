@@ -130,6 +130,7 @@ class EvidenceAssembler:
     def _build_source(self, r: dict) -> SourceRef:
         scope = _parse_scope(r.get("doc_scope_json", "{}"))
         tags = _parse_json_list(r.get("tags_json", "[]"))
+        processing_profile = _parse_json_dict(r.get("processing_profile_json", "{}"))
 
         return SourceRef(
             document_key=r.get("document_key", ""),
@@ -140,6 +141,7 @@ class EvidenceAssembler:
             file_type=r.get("file_type"),
             document_type=r.get("document_type"),
             tags=tags,
+            processing_profile=processing_profile,
         )
 
     def _build_variant(self, r: dict) -> VariantInfo:
@@ -202,10 +204,6 @@ class EvidenceAssembler:
                 ))
 
         if variants:
-            scope_descs = []
-            for v in variants[-3:]:
-                scope = v.get("doc_scope_json", "{}")
-                scope_descs.append(str(scope))
             gaps.append(Gap(
                 field="scope_variant",
                 reason=f"存在 {len(variants)} 个 scope 变体未纳入主 evidence",
@@ -227,36 +225,32 @@ class EvidenceAssembler:
         return result
 
     def _collect_scope(self, hits: list[dict]) -> QueryScope:
-        all_products: list[str] = []
-        all_versions: list[str] = []
-        all_nes: list[str] = []
-        all_projects: list[str] = []
-        all_domains: list[str] = []
+        all_products: set[str] = set()
+        all_versions: set[str] = set()
+        all_nes: set[str] = set()
+        all_projects: set[str] = set()
+        all_domains: set[str] = set()
+        all_scenarios: set[str] = set()
+        all_authors: set[str] = set()
 
         for h in hits:
             scope = _parse_scope(h.get("scope_json", "{}"))
-            for p in scope.products:
-                if p not in all_products:
-                    all_products.append(p)
-            for v in scope.product_versions:
-                if v not in all_versions:
-                    all_versions.append(v)
-            for ne in scope.network_elements:
-                if ne not in all_nes:
-                    all_nes.append(ne)
-            for pr in scope.projects:
-                if pr not in all_projects:
-                    all_projects.append(pr)
-            for d in scope.domains:
-                if d not in all_domains:
-                    all_domains.append(d)
+            all_products.update(scope.products)
+            all_versions.update(scope.product_versions)
+            all_nes.update(scope.network_elements)
+            all_projects.update(scope.projects)
+            all_domains.update(scope.domains)
+            all_scenarios.update(scope.scenarios)
+            all_authors.update(scope.authors)
 
         return QueryScope(
-            products=all_products,
-            product_versions=all_versions,
-            network_elements=all_nes,
-            projects=all_projects,
-            domains=all_domains,
+            products=sorted(all_products),
+            product_versions=sorted(all_versions),
+            network_elements=sorted(all_nes),
+            projects=sorted(all_projects),
+            domains=sorted(all_domains),
+            scenarios=sorted(all_scenarios),
+            authors=sorted(all_authors),
         )
 
     def _build_followups(self, gaps: list[Gap], conflicts: list[ConflictInfo]) -> list[str]:
@@ -288,6 +282,8 @@ class EvidenceAssembler:
         items: list[UnparsedDocument] = []
         for doc in raw_docs:
             scope = _parse_scope(doc.get("scope_json", "{}"))
+            tags = _parse_json_list(doc.get("tags_json", "[]"))
+            processing_profile = _parse_json_dict(doc.get("processing_profile_json", "{}"))
             items.append(UnparsedDocument(
                 id=str(doc["id"]),
                 document_key=doc.get("document_key", ""),
@@ -295,6 +291,8 @@ class EvidenceAssembler:
                 file_type=doc.get("file_type"),
                 document_type=doc.get("document_type"),
                 scope=scope,
+                tags=tags,
+                processing_profile=processing_profile,
             ))
         return items
 
@@ -388,4 +386,6 @@ def _parse_scope(raw: str | dict) -> QueryScope:
         network_elements=_get_list("network_elements"),
         projects=_get_list("projects"),
         domains=_get_list("domains"),
+        scenarios=_get_list("scenarios"),
+        authors=_get_list("authors"),
     )

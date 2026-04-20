@@ -35,7 +35,10 @@ from agent_serving.serving.application.normalizer_config import (
     DEFAULT_INTENT_PROCEDURE_KEYWORDS,
     DEFAULT_INTENT_TROUBLESHOOT_KEYWORDS,
     DEFAULT_INTENT_ROLE_MAP,
+    DEFAULT_MIN_KEYWORD_LENGTH,
     DEFAULT_OP_MAP,
+    DEFAULT_STOPWORDS_EN,
+    DEFAULT_STOPWORDS_ZH,
     build_command_regex,
     build_ne_regex,
     build_product_regex,
@@ -71,6 +74,8 @@ class QueryNormalizer:
         self._intent_role_map: dict[str, list[str]] = cfg.get(
             "intent_role_map", DEFAULT_INTENT_ROLE_MAP
         )
+        self._stopwords: set[str] = DEFAULT_STOPWORDS_ZH | DEFAULT_STOPWORDS_EN
+        self._min_keyword_length: int = DEFAULT_MIN_KEYWORD_LENGTH
 
     def normalize(self, query: str) -> NormalizedQuery:
         entities = self._extract_entities(query)
@@ -163,7 +168,11 @@ class QueryNormalizer:
         for pattern in [self._command_re, self._product_re, self._version_re, self._ne_re]:
             cleaned = pattern.sub("", cleaned)
         tokens = [t for t in re.split(r"[\s,，、？?。.！!]+", cleaned) if len(t) > 0]
-        return tokens
+        # Filter stopwords and short low-information tokens
+        return [
+            t for t in tokens
+            if t not in self._stopwords and len(t) >= self._min_keyword_length
+        ]
 
     def _find_missing(
         self, entities: list[EntityRef], scope: QueryScope, intent: str
@@ -203,6 +212,8 @@ def build_plan(normalized: NormalizedQuery) -> QueryPlan:
             network_elements=list(normalized.scope.network_elements),
             projects=list(normalized.scope.projects),
             domains=list(normalized.scope.domains),
+            scenarios=list(normalized.scope.scenarios),
+            authors=list(normalized.scope.authors),
         ),
         semantic_role_preferences=list(normalized.desired_semantic_roles),
         block_type_preferences=list(normalized.desired_block_types),

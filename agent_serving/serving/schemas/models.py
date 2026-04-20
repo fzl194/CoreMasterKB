@@ -40,6 +40,8 @@ class QueryScope(BaseModel):
     network_elements: list[str] = Field(default_factory=list)
     projects: list[str] = Field(default_factory=list)
     domains: list[str] = Field(default_factory=list)
+    scenarios: list[str] = Field(default_factory=list)
+    authors: list[str] = Field(default_factory=list)
 
 
 class NormalizedQuery(BaseModel):
@@ -117,6 +119,7 @@ class SourceRef(BaseModel):
     file_type: str | None = None
     document_type: str | None = None
     tags: list[str] = Field(default_factory=list)
+    processing_profile: dict = Field(default_factory=dict)
 
 
 class VariantInfo(BaseModel):
@@ -144,6 +147,8 @@ class UnparsedDocument(BaseModel):
     file_type: str | None = None
     document_type: str | None = None
     scope: QueryScope = Field(default_factory=QueryScope)
+    tags: list[str] = Field(default_factory=list)
+    processing_profile: dict = Field(default_factory=dict)
 
 
 class Gap(BaseModel):

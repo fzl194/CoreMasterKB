@@ -58,6 +58,28 @@ DEFAULT_INTENT_ROLE_MAP: dict[str, list[str]] = {
     "general": [],
 }
 
+# --- Stopwords for keyword filtering ---
+
+DEFAULT_STOPWORDS_ZH: set[str] = {
+    "的", "了", "在", "是", "和", "与", "及", "或", "也", "都",
+    "这", "那", "有", "没", "不", "会", "能", "要", "可以",
+    "什么", "怎么", "如何", "哪些", "为什么", "吗", "呢", "啊",
+    "个", "一", "到", "把", "被", "让", "给", "从", "对", "等",
+    "请问", "帮我", "告诉", "知道", "想", "应该", "需要",
+    "区别", "区别于", "差异", "不同", "区别是什么", "有什么区别",
+}
+DEFAULT_STOPWORDS_EN: set[str] = {
+    "a", "an", "the", "is", "are", "was", "were", "be", "been",
+    "do", "does", "did", "has", "have", "had",
+    "and", "or", "but", "not", "no", "in", "on", "at", "to",
+    "of", "for", "with", "from", "by", "as",
+    "what", "which", "how", "why", "when", "where", "who",
+    "this", "that", "these", "those",
+    "can", "could", "will", "would", "should", "may", "might",
+}
+
+DEFAULT_MIN_KEYWORD_LENGTH: int = 2
+
 
 def _load_yaml_config() -> dict | None:
     """Load normalizer config from YAML if available."""

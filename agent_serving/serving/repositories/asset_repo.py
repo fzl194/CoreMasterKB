@@ -17,6 +17,14 @@ import aiosqlite
 
 from agent_serving.serving.schemas.models import QueryPlan, QueryScope
 
+# Scoring constants for _score_and_truncate
+_KEYWORD_WEIGHT = 10.0
+_VARIANT_PENALTY = -0.1
+
+# Recall over-fetch factor: pull N× more candidates for Python-side scoring
+_RECALL_MULTIPLIER = 5
+_MIN_RECALL_LIMIT = 50
+
 
 class AssetRepository:
     def __init__(self, db: aiosqlite.Connection) -> None:
@@ -51,7 +59,7 @@ class AssetRepository:
 
         cursor = await self._db.execute(
             "SELECT rd.id, rd.document_key, rd.relative_path, rd.file_type, "
-            "  rd.document_type, rd.scope_json, rd.tags_json "
+            "  rd.document_type, rd.scope_json, rd.tags_json, rd.processing_profile_json "
             "FROM asset_raw_documents rd "
             "WHERE rd.publish_version_id = ? "
             "AND NOT EXISTS ("
@@ -66,8 +74,8 @@ class AssetRepository:
     ) -> list[dict[str, Any]]:
         """Search canonical segments based on QueryPlan.
 
-        Strategy: search_text LIKE recall, then Python-side JSON filtering.
-        Falls back to canonical_text/title when entity_refs is empty.
+        Strategy: search_text LIKE recall with large candidate set,
+        then Python-side scoring and truncation.
         """
         if pv_id is None:
             pv_id, _ = await self.get_active_publish_version_id()
@@ -79,20 +87,22 @@ class AssetRepository:
 
         # Entity name search via search_text
         entity_names = [e.name for e in plan.entity_constraints]
-        if entity_names:
-            like_clauses = " OR ".join("cs.search_text LIKE ?" for _ in entity_names)
-            conditions.append(f"({like_clauses})")
-            params.extend(f"%{self._escape_like(name)}%" for name in entity_names)
-        elif plan.keywords:
-            like_clauses = " OR ".join("cs.search_text LIKE ?" for _ in plan.keywords)
-            conditions.append(f"({like_clauses})")
-            params.extend(f"%{self._escape_like(kw)}%" for kw in plan.keywords)
-        else:
+        search_terms = entity_names if entity_names else plan.keywords
+        if not search_terms:
             return []
 
+        like_clauses = " OR ".join("cs.search_text LIKE ?" for _ in search_terms)
+        conditions.append(f"({like_clauses})")
+        params.extend(f"%{self._escape_like(t)}%" for t in search_terms)
+
+        # Recall larger candidate set for scoring
+        recall_limit = max(
+            plan.evidence_budget.canonical_limit * _RECALL_MULTIPLIER,
+            _MIN_RECALL_LIMIT,
+        )
         query = f"SELECT * FROM asset_canonical_segments cs WHERE {' AND '.join(conditions)}"
         query += " LIMIT ?"
-        params.append(plan.evidence_budget.canonical_limit)
+        params.append(recall_limit)
 
         cursor = await self._db.execute(query, params)
         rows = await cursor.fetchall()
@@ -110,6 +120,12 @@ class AssetRepository:
 
         if plan.block_type_preferences:
             results = self._sort_by_block_types(results, plan.block_type_preferences)
+
+        # Score by keyword hit count and quality, then truncate
+        if search_terms:
+            results = self._score_and_truncate(
+                results, search_terms, plan.evidence_budget.canonical_limit,
+            )
 
         return results
 
@@ -272,26 +288,66 @@ class AssetRepository:
         other = [r for r in results if r.get("block_type", "unknown") not in preferred_types]
         return preferred + other
 
+    def _score_and_truncate(
+        self, results: list[dict], search_terms: list[str], limit: int,
+    ) -> list[dict]:
+        """Score results by keyword hit count + quality, then truncate.
+
+        Scoring factors:
+        - Keyword hit count: how many search terms appear in search_text
+        - quality_score from canonical segment
+        - has_variants penalty (prefer unambiguous results)
+        """
+        if not results:
+            return results
+
+        def _score(r: dict) -> float:
+            text = (r.get("search_text", "") or r.get("canonical_text", "")).lower()
+            # Count how many search terms hit
+            hit_count = sum(1 for t in search_terms if t.lower() in text)
+            keyword_score = hit_count / len(search_terms) if search_terms else 0
+
+            quality = float(r.get("quality_score", 0) or 0)
+            # Small penalty for variants (prefer unambiguous first)
+            variant_penalty = _VARIANT_PENALTY if r.get("has_variants") else 0.0
+
+            return keyword_score * _KEYWORD_WEIGHT + quality + variant_penalty
+
+        scored = sorted(results, key=_score, reverse=True)
+        return scored[:limit]
+
     def _scope_is_sufficient(self, scope: QueryScope) -> bool:
         """Check if query provides enough scope to resolve variants.
 
-        At minimum: products must be specified for scope_variant resolution.
+        Any constrained dimension counts as sufficient — not just products.
+        A user specifying project/domain/scenario can also disambiguate variants.
         """
-        return bool(scope.products)
+        return bool(
+            scope.products
+            or scope.product_versions
+            or scope.network_elements
+            or scope.projects
+            or scope.domains
+            or scope.scenarios
+            or scope.authors
+        )
 
     def _matches_scope(self, row: dict, scope: QueryScope) -> bool:
         """Check if a raw evidence row matches scope constraints.
 
         Compatible with singular/plural scope_json.
         If no scope constraints specified, everything matches.
+        When user explicitly constrains a dimension and the document lacks it,
+        the dimension is treated as non-matching (conservative for evidence selection).
         """
-        # Check all scope dimensions — if any is constrained, it must match
         scope_dims = [
             ("products", scope.products),
             ("product_versions", scope.product_versions),
             ("network_elements", scope.network_elements),
             ("projects", scope.projects),
             ("domains", scope.domains),
+            ("scenarios", scope.scenarios),
+            ("authors", scope.authors),
         ]
         has_any_constraint = any(v for _, v in scope_dims)
         if not has_any_constraint:
@@ -311,13 +367,13 @@ class AssetRepository:
                 singular = plural_key.rstrip("s")
                 doc_values = doc_scope.get(singular)
                 if doc_values is None:
-                    # Also try singular without 's' (e.g., scenario -> scenarios)
-                    continue
+                    # User constrained this dimension but doc has no value — conservative: no match
+                    return False
             # Normalize to list
             if isinstance(doc_values, str):
                 doc_values = [doc_values]
             elif not isinstance(doc_values, list):
-                continue
+                return False
             if not any(v in doc_values for v in constraint_values):
                 return False
 
