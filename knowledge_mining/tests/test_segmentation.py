@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from knowledge_mining.mining.document_profile import build_profile
-from knowledge_mining.mining.models import RawDocumentData, RawSegmentData
+from knowledge_mining.mining.models import ContentBlock, RawDocumentData, RawSegmentData, SectionNode
 from knowledge_mining.mining.segmentation import segment_document
 from knowledge_mining.mining.structure import parse_structure
 
@@ -104,6 +104,48 @@ class TestSegmentationBlockTypes:
         segs = _make_segments("# List\n\n- Item 1\n- Item 2\n- Item 3")
         list_segs = [s for s in segs if s.block_type == "list"]
         assert len(list_segs) >= 1
+
+    def test_internal_heading_block_never_persisted_as_segment_type(self):
+        root = SectionNode(
+            title="Root",
+            level=1,
+            blocks=(
+                ContentBlock(block_type="heading", text="Leaked Heading", level=2),
+                ContentBlock(block_type="paragraph", text="Body text"),
+            ),
+        )
+        segs = segment_document(root, build_profile(RawDocumentData(
+            file_path="test.md",
+            relative_path="test.md",
+            file_name="test.md",
+            file_type="markdown",
+            content="",
+            content_hash="h",
+        )))
+
+        assert len(segs) == 1
+        assert segs[0].block_type == "paragraph"
+
+    def test_invalid_classifier_role_never_persisted(self):
+        class BadRoleClassifier:
+            def classify(self, text, section_title, block_type, context):
+                return "overview"
+
+        segs = segment_document(
+            parse_structure("# Title\n\nContent"),
+            build_profile(RawDocumentData(
+                file_path="test.md",
+                relative_path="test.md",
+                file_name="test.md",
+                file_type="markdown",
+                content="",
+                content_hash="h",
+            )),
+            role_classifier=BadRoleClassifier(),
+        )
+
+        assert len(segs) == 1
+        assert segs[0].semantic_role == "unknown"
 
 
 class TestSegmentationHashesAndTokens:

@@ -21,6 +21,30 @@ from knowledge_mining.mining.text_utils import (
     token_count,
 )
 
+_SCHEMA_BLOCK_TYPES = {
+    "paragraph",
+    "table",
+    "list",
+    "code",
+    "blockquote",
+    "html_table",
+    "raw_html",
+    "unknown",
+}
+
+_SCHEMA_SEMANTIC_ROLES = {
+    "concept",
+    "parameter",
+    "example",
+    "note",
+    "procedure_step",
+    "troubleshooting_step",
+    "constraint",
+    "alarm",
+    "checklist",
+    "unknown",
+}
+
 
 def segment_document(
     doc_root: SectionNode,
@@ -122,15 +146,17 @@ def _make_segment(
     parser_name: str,
 ) -> RawSegmentData:
     """Create a RawSegmentData from a group of content blocks."""
-    primary_block = blocks[0] if blocks else None
-    block_type = primary_block.block_type if primary_block else "unknown"
+    primary_block = next((b for b in blocks if b.block_type != "heading"), None)
+    if primary_block is None:
+        primary_block = blocks[0] if blocks else None
+    block_type = _schema_block_type(primary_block.block_type if primary_block else "unknown")
 
     raw_text = "\n\n".join(b.text for b in blocks)
     norm_text = raw_text.lower().strip()
 
-    semantic_role = classifier.classify(
+    semantic_role = _schema_semantic_role(classifier.classify(
         raw_text, section.title, block_type, context,
-    )
+    ))
 
     structure_json = _extract_structure_info(blocks)
 
@@ -213,3 +239,19 @@ def _extract_structure_info(blocks: list[ContentBlock]) -> dict:
         elif block.block_type == "paragraph":
             info["paragraph_count"] = info.get("paragraph_count", 0) + 1
     return info
+
+
+def _schema_block_type(block_type: str) -> str:
+    """Map parser-internal block types to asset schema block_type values."""
+    if block_type in _SCHEMA_BLOCK_TYPES:
+        return block_type
+    if block_type == "heading":
+        return "paragraph"
+    return "unknown"
+
+
+def _schema_semantic_role(semantic_role: str) -> str:
+    """Map classifier/plugin output to asset schema semantic_role values."""
+    if semantic_role in _SCHEMA_SEMANTIC_ROLES:
+        return semantic_role
+    return "unknown"
