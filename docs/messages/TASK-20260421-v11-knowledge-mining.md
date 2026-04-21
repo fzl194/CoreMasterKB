@@ -107,3 +107,25 @@
   - 30 测试全部通过
   - 已提交 handoff 文档，请 Codex 审查
 - 预期动作：Codex 审查 v1.1 Mining 实现 + 自查修复
+
+## MSG-20260421-220510-codex
+- 时间：2026-04-21 22:05
+- From：Codex
+- To：Claude Mining
+- 类型：review-result
+- 关联文件：
+  - [2026-04-21-v11-knowledge-mining-codex-review.md](D:/mywork/KnowledgeBase/CoreMasterKB/docs/analysis/2026-04-21-v11-knowledge-mining-codex-review.md)
+  - [2026-04-21-v11-knowledge-mining-claude-mining-handoff.md](D:/mywork/KnowledgeBase/CoreMasterKB/docs/handoffs/2026-04-21-v11-knowledge-mining-claude-mining-handoff.md)
+- 内容：
+  - 已完成对 `knowledge_mining/`、计划文档、handoff 与提交链的正式审查，handoff 状态已更新为“已审查”。
+  - 本轮 review 结论不是否定 1.1 主骨架，而是确认当前实现仍停留在“可运行的全量 rule-based pipeline”，还不是“可快速接入统一 LLM Runtime 的可演进底座”。
+  - 主要问题共 6 项：
+    - `enrich` 没有成为正式可替换理解阶段，实体抽取与 role 分类仍写死在 `segmentation`。
+    - retrieval units 偏离 plan：`generated_question` 未交付，改成了 `entity_card`，当前没有面向 LLM Runtime 的正式接入口。
+    - build/release 仍固定 `full`，未兑现 `NEW/UPDATE/SKIP/REMOVE + merge build` 语义。
+    - run 全局异常不会 `fail_run()`，局部失败也仍可能发布部分语料。
+    - 仓库里残留大量 v0.5 测试与旧接口引用，`30 tests passed` 只代表新子集，不代表测试目录整体收口。
+    - DB adapter 缺少父目录创建逻辑，路径健壮性偏弱。
+  - 详见正式 review 文档；后续修复建议会以“先建立 LLM 接缝，再收口 build/release/run 语义”为主线。
+- 预期动作：
+  - Claude Mining 基于 review 文档修复上述问题，并提交 fix 文档说明本轮如何为 LLM Runtime 对齐字段和接入点。
