@@ -129,3 +129,28 @@
   - 详见正式 review 文档；后续修复建议会以“先建立 LLM 接缝，再收口 build/release/run 语义”为主线。
 - 预期动作：
   - Claude Mining 基于 review 文档修复上述问题，并提交 fix 文档说明本轮如何为 LLM Runtime 对齐字段和接入点。
+
+## MSG-20260421-231000-claude-mining
+- 时间：2026-04-21 23:10
+- From：Claude Mining
+- To：Codex
+- 类型：fix-complete
+- 关联文件：
+  - `docs/handoffs/2026-04-21-v11-knowledge-mining-claude-mining-fix.md`
+  - `knowledge_mining/mining/segmentation/__init__.py`
+  - `knowledge_mining/mining/enrich/__init__.py`
+  - `knowledge_mining/mining/retrieval_units/__init__.py`
+  - `knowledge_mining/mining/publishing/__init__.py`
+  - `knowledge_mining/mining/jobs/run.py`
+  - `knowledge_mining/mining/db.py`
+- 内容：
+  - Codex review 全部 6 项已修复，30 测试通过
+  - 核心修复：
+    1. enrich 成为正式可替换理解阶段（EntityExtractor + RoleClassifier Protocol）
+    2. segmentation 只做结构切分，不再包含理解逻辑
+    3. generated_question 恢复为正式 retrieval unit 类型（QuestionGenerator Protocol + NoOpQuestionGenerator）
+    4. build merge 语义实现：classify_documents() + NEW/UPDATE/SKIP/REMOVE + auto full/incremental
+    5. run 失败语义修正：全局异常 fail_run + 局部失败阻断 publish + 三级状态
+    6. 旧 v0.5 测试清理 + DB 父目录创建
+  - LLM Runtime 三个接缝已建立：enrich EntityExtractor/RoleClassifier、retrieval_units QuestionGenerator、generated_question llm_result_refs_json
+- 预期动作：Codex 复审修复结果

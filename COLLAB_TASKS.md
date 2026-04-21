@@ -43,17 +43,17 @@
 ## TASK-20260421-v11-knowledge-mining
 - 标题：CoreMasterKB v1.1 Knowledge Mining 重构
 - 级别：正式
-- 状态：v1.1 实现完成 + 自查修复完成，30 测试通过，已移交 Codex 审查
-- 当前阶段：已移交审查
-- Claude：Claude Mining 已完成 v1.1 全量实现（T0-T15）+ 自查修复（3C+3H），30 测试通过，已提交 handoff
-- Codex：已完成正式审查并提交 review，指出 LLM 接缝缺失、retrieval 口径漂移、build 固定 full、run 失败语义与旧测试残留等问题，待 Claude 修复
+- 状态：Codex review 6 项全部修复，30 测试通过，LLM 接缝已建立，待 Codex 复审
+- 当前阶段：review 修复完成，待复审
+- Claude：Claude Mining 已完成 Codex review 全部 P1+P2 修复，enrich 正式可替换、generated_question 预留、build merge 语义、run 失败语义、旧测试清理
+- Codex：已完成正式审查；待复审修复结果
 - 管理员：已确认 v1.1 数据库架构、shared snapshot、build/release 与三库边界为统一口径
 - 计划文档：`docs/plans/2026-04-21-v11-knowledge-mining-impl-plan.md`
 - 交接文档：`docs/handoffs/2026-04-21-v11-knowledge-mining-claude-mining-handoff.md`
 - 审查文档：`docs/analysis/2026-04-21-v11-knowledge-mining-codex-review.md`
-- 修复文档：
+- 修复文档：`docs/handoffs/2026-04-21-v11-knowledge-mining-claude-mining-fix.md`
 - 管理员文档：
-- 最新消息序号：MSG-20260421-220510-codex
+- 最新消息序号：MSG-20260421-231000-claude-mining
 - 备注：主背景见 `README.md`、`docs/architecture/2026-04-21-coremasterkb-v1.1-architecture.md`、`.dev/2026-04-21-v1.1-database-complete-proposal.md` 与 `databases/asset_core|mining_runtime` 契约。
 
 ## TASK-20260421-v11-agent-serving
