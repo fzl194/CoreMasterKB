@@ -19,7 +19,7 @@ databases/
 
 原因：
 
-1. `asset_core` 是发布后、可服务、相对稳定的知识资产。
+1. `asset_core` 是稳定知识资产 + build/release 控制面。
 2. `mining_runtime` 是挖掘过程状态，带有大量中间态、失败态、重试态。
 3. `agent_llm_runtime` 是独立服务的任务队列、请求、attempt、结果和审计日志。
 
@@ -38,7 +38,7 @@ Mining 同时会碰到：
 
 1. Serving 只应该看到发布后的资产，不应该看到 Mining 运行态噪音表。
 2. `mining_runtime` 的写入频率、失败重试、清理策略和 `asset_core` 完全不同。
-3. 后续如果要保留 active 资产包或做发布回退，`asset_core` 需要尽量稳定。
+3. `asset_core` 现在承载的是 `document / shared snapshot / build / release` 主链，需要保持稳定。
 
 ### 3. 物理层面的折中
 
@@ -64,3 +64,25 @@ dev / 单机调试便利
 逻辑分库必须坚持；
 物理合库只允许作为 dev 便利，不作为正式设计。
 ```
+
+## 当前统一主链
+
+当前三库合起来的统一主链是：
+
+```text
+source_batch
+  -> mining_run
+  -> document
+  -> shared snapshot
+  -> document_snapshot_link
+  -> raw_segments / relations / retrieval_units
+  -> build
+  -> release
+  -> serving
+```
+
+其中：
+
+- `mining_runtime` 负责“怎么生产出来”
+- `asset_core` 负责“生产出了什么，以及哪些正式生效”
+- `agent_llm_runtime` 负责“LLM 在这个过程中做了什么”

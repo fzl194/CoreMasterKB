@@ -12,6 +12,7 @@
 2. 某个文档是 `NEW / UPDATE / SKIP`。
 3. 某个文档在哪个阶段失败了。
 4. 如何做断点续跑和阶段统计。
+5. 哪个 run 最终产出了哪个 build。
 
 ## 表
 
@@ -19,7 +20,7 @@
 |---|---|
 | `mining_runs` | 一次挖掘执行 |
 | `mining_run_documents` | 某次 run 中每个文档的处理状态 |
-| `mining_run_stage_events` | 阶段事件流 |
+| `mining_run_stage_events` | 阶段事件流，既支持文档级，也支持 run 级 |
 
 ## 和 `asset_core` 的关系
 
@@ -30,10 +31,17 @@
 ```text
 source_batch
   -> mining_run
-  -> staging asset build
-  -> publish_version
-  -> active asset_core
+  -> document/snapshot/segments/relations/retrieval_units
+  -> build
+  -> release
+  -> serving
 ```
+
+其中：
+
+- `mining_run_documents.committed` 只表示文档级稳定内容对象已经落地
+- 不表示该内容已经进入 active release
+- run 级阶段如 `assemble_build / validate_build / publish_release` 通过 `mining_run_stage_events.run_id` 追溯
 
 ## 是否和 `asset_core` 合并
 

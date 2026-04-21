@@ -2,10 +2,11 @@
 --
 -- Notes:
 -- 1. This file mirrors the SQLite contract semantically.
--- 2. It is kept as a relational baseline, but current local development
---    and contract verification are driven by 001_asset_core.sqlite.sql.
--- 3. Full-text search integration is implementation-specific and should
---    be adapted by the runtime database layer.
+-- 2. asset_core stores stable content assets plus build/release control data.
+-- 3. Shared immutable content snapshots are the content reuse boundary.
+-- 4. Build selects document -> snapshot mappings.
+-- 5. Release publishes one build to one channel.
+-- 6. Full-text search integration is implementation-specific and should be adapted by the runtime database layer.
 
 CREATE TABLE IF NOT EXISTS asset_source_batches (
     id            TEXT PRIMARY KEY,
@@ -17,89 +18,83 @@ CREATE TABLE IF NOT EXISTS asset_source_batches (
     metadata_json TEXT NOT NULL DEFAULT '{}'
 );
 
-CREATE TABLE IF NOT EXISTS asset_publish_versions (
-    id                      TEXT PRIMARY KEY,
-    version_code            TEXT NOT NULL UNIQUE,
-    status                  TEXT NOT NULL,
-    base_publish_version_id TEXT REFERENCES asset_publish_versions(id) ON DELETE SET NULL,
-    source_batch_id         TEXT REFERENCES asset_source_batches(id) ON DELETE SET NULL,
-    description             TEXT,
-    build_started_at        TEXT NOT NULL,
-    build_finished_at       TEXT,
-    activated_at            TEXT,
-    build_error             TEXT,
-    metadata_json           TEXT NOT NULL DEFAULT '{}'
+CREATE TABLE IF NOT EXISTS asset_documents (
+    id             TEXT PRIMARY KEY,
+    document_key   TEXT NOT NULL UNIQUE,
+    document_name  TEXT,
+    document_type  TEXT,
+    metadata_json  TEXT NOT NULL DEFAULT '{}',
+    created_at     TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS asset_raw_documents (
+CREATE TABLE IF NOT EXISTS asset_document_snapshots (
     id                      TEXT PRIMARY KEY,
-    document_key            TEXT NOT NULL UNIQUE,
-    source_uri              TEXT NOT NULL,
-    relative_path           TEXT NOT NULL,
-    file_name               TEXT NOT NULL,
-    file_type               TEXT NOT NULL,
-    source_type             TEXT,
+    normalized_content_hash TEXT NOT NULL UNIQUE,
+    raw_content_hash        TEXT NOT NULL,
+    mime_type               TEXT NOT NULL,
     title                   TEXT,
-    document_type           TEXT,
-    content_hash            TEXT NOT NULL,
-    origin_batch_id         TEXT REFERENCES asset_source_batches(id) ON DELETE SET NULL,
-    created_at              TEXT NOT NULL,
-    updated_at              TEXT NOT NULL,
     scope_json              TEXT NOT NULL DEFAULT '{}',
     tags_json               TEXT NOT NULL DEFAULT '[]',
-    structure_quality       TEXT NOT NULL DEFAULT 'unknown',
-    processing_profile_json TEXT NOT NULL DEFAULT '{}',
-    metadata_json           TEXT NOT NULL DEFAULT '{}'
+    parser_profile_json     TEXT NOT NULL DEFAULT '{}',
+    metadata_json           TEXT NOT NULL DEFAULT '{}',
+    created_at              TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS asset_batch_documents (
-    batch_id       TEXT NOT NULL REFERENCES asset_source_batches(id) ON DELETE CASCADE,
-    document_id    TEXT NOT NULL REFERENCES asset_raw_documents(id) ON DELETE CASCADE,
-    content_hash   TEXT NOT NULL,
-    discovered_at  TEXT NOT NULL,
-    PRIMARY KEY (batch_id, document_id)
+CREATE TABLE IF NOT EXISTS asset_document_snapshot_links (
+    id                   TEXT PRIMARY KEY,
+    document_id          TEXT NOT NULL REFERENCES asset_documents(id) ON DELETE CASCADE,
+    document_snapshot_id TEXT NOT NULL REFERENCES asset_document_snapshots(id) ON DELETE RESTRICT,
+    source_batch_id      TEXT REFERENCES asset_source_batches(id) ON DELETE SET NULL,
+    relative_path        TEXT NOT NULL,
+    source_uri           TEXT NOT NULL,
+    title                TEXT,
+    scope_json           TEXT NOT NULL DEFAULT '{}',
+    tags_json            TEXT NOT NULL DEFAULT '[]',
+    linked_at            TEXT NOT NULL,
+    metadata_json        TEXT NOT NULL DEFAULT '{}'
 );
 
 CREATE TABLE IF NOT EXISTS asset_raw_segments (
-    id                  TEXT PRIMARY KEY,
-    raw_document_id     TEXT NOT NULL REFERENCES asset_raw_documents(id) ON DELETE CASCADE,
-    segment_key         TEXT NOT NULL,
-    segment_index       INTEGER NOT NULL,
-    section_path        TEXT NOT NULL DEFAULT '[]',
-    section_title       TEXT,
-    block_type          TEXT NOT NULL DEFAULT 'unknown',
-    semantic_role       TEXT NOT NULL DEFAULT 'unknown',
-    raw_text            TEXT NOT NULL,
-    normalized_text     TEXT NOT NULL,
-    content_hash        TEXT NOT NULL,
-    normalized_hash     TEXT NOT NULL,
-    token_count         INTEGER,
-    structure_json      TEXT NOT NULL DEFAULT '{}',
-    source_offsets_json TEXT NOT NULL DEFAULT '{}',
-    entity_refs_json    TEXT NOT NULL DEFAULT '[]',
-    metadata_json       TEXT NOT NULL DEFAULT '{}',
-    UNIQUE (raw_document_id, segment_key)
+    id                   TEXT PRIMARY KEY,
+    document_snapshot_id TEXT NOT NULL REFERENCES asset_document_snapshots(id) ON DELETE CASCADE,
+    segment_key          TEXT NOT NULL,
+    segment_index        INTEGER NOT NULL,
+    section_path         TEXT NOT NULL DEFAULT '[]',
+    section_title        TEXT,
+    block_type           TEXT NOT NULL DEFAULT 'unknown',
+    semantic_role        TEXT NOT NULL DEFAULT 'unknown',
+    raw_text             TEXT NOT NULL,
+    normalized_text      TEXT NOT NULL,
+    content_hash         TEXT NOT NULL,
+    normalized_hash      TEXT NOT NULL,
+    token_count          INTEGER,
+    structure_json       TEXT NOT NULL DEFAULT '{}',
+    source_offsets_json  TEXT NOT NULL DEFAULT '{}',
+    entity_refs_json     TEXT NOT NULL DEFAULT '[]',
+    metadata_json        TEXT NOT NULL DEFAULT '{}',
+    UNIQUE (document_snapshot_id, segment_key)
 );
 
 CREATE TABLE IF NOT EXISTS asset_raw_segment_relations (
-    id                 TEXT PRIMARY KEY,
-    source_segment_id  TEXT NOT NULL REFERENCES asset_raw_segments(id) ON DELETE CASCADE,
-    target_segment_id  TEXT NOT NULL REFERENCES asset_raw_segments(id) ON DELETE CASCADE,
-    relation_type      TEXT NOT NULL,
-    weight             DOUBLE PRECISION NOT NULL DEFAULT 1.0,
-    confidence         DOUBLE PRECISION NOT NULL DEFAULT 1.0,
-    distance           INTEGER,
-    metadata_json      TEXT NOT NULL DEFAULT '{}',
+    id                   TEXT PRIMARY KEY,
+    document_snapshot_id TEXT NOT NULL REFERENCES asset_document_snapshots(id) ON DELETE CASCADE,
+    source_segment_id    TEXT NOT NULL REFERENCES asset_raw_segments(id) ON DELETE CASCADE,
+    target_segment_id    TEXT NOT NULL REFERENCES asset_raw_segments(id) ON DELETE CASCADE,
+    relation_type        TEXT NOT NULL,
+    weight               DOUBLE PRECISION NOT NULL DEFAULT 1.0,
+    confidence           DOUBLE PRECISION NOT NULL DEFAULT 1.0,
+    distance             INTEGER,
+    metadata_json        TEXT NOT NULL DEFAULT '{}',
     UNIQUE (source_segment_id, target_segment_id, relation_type)
 );
 
 CREATE TABLE IF NOT EXISTS asset_retrieval_units (
     id                   TEXT PRIMARY KEY,
+    document_snapshot_id TEXT NOT NULL REFERENCES asset_document_snapshots(id) ON DELETE CASCADE,
     unit_key             TEXT NOT NULL,
     unit_type            TEXT NOT NULL,
     target_type          TEXT NOT NULL,
-    target_id            TEXT,
-    raw_document_id      TEXT NOT NULL REFERENCES asset_raw_documents(id) ON DELETE CASCADE,
+    target_ref_json      TEXT NOT NULL DEFAULT '{}',
     title                TEXT,
     text                 TEXT NOT NULL,
     search_text          TEXT NOT NULL,
@@ -112,7 +107,7 @@ CREATE TABLE IF NOT EXISTS asset_retrieval_units (
     weight               DOUBLE PRECISION NOT NULL DEFAULT 1.0,
     created_at           TEXT NOT NULL,
     metadata_json        TEXT NOT NULL DEFAULT '{}',
-    UNIQUE (raw_document_id, unit_key)
+    UNIQUE (document_snapshot_id, unit_key)
 );
 
 CREATE TABLE IF NOT EXISTS asset_retrieval_embeddings (
@@ -126,6 +121,44 @@ CREATE TABLE IF NOT EXISTS asset_retrieval_embeddings (
     content_hash       TEXT NOT NULL,
     created_at         TEXT NOT NULL,
     metadata_json      TEXT NOT NULL DEFAULT '{}'
+);
+
+CREATE TABLE IF NOT EXISTS asset_builds (
+    id               TEXT PRIMARY KEY,
+    build_code       TEXT NOT NULL UNIQUE,
+    status           TEXT NOT NULL,
+    build_mode       TEXT NOT NULL,
+    source_batch_id  TEXT REFERENCES asset_source_batches(id) ON DELETE SET NULL,
+    parent_build_id  TEXT REFERENCES asset_builds(id) ON DELETE SET NULL,
+    mining_run_id    TEXT,
+    summary_json     TEXT NOT NULL DEFAULT '{}',
+    validation_json  TEXT NOT NULL DEFAULT '{}',
+    created_at       TEXT NOT NULL,
+    finished_at      TEXT
+);
+
+CREATE TABLE IF NOT EXISTS asset_build_document_snapshots (
+    build_id              TEXT NOT NULL REFERENCES asset_builds(id) ON DELETE CASCADE,
+    document_id           TEXT NOT NULL REFERENCES asset_documents(id) ON DELETE CASCADE,
+    document_snapshot_id  TEXT NOT NULL REFERENCES asset_document_snapshots(id) ON DELETE RESTRICT,
+    selection_status      TEXT NOT NULL,
+    reason                TEXT NOT NULL,
+    metadata_json         TEXT NOT NULL DEFAULT '{}',
+    PRIMARY KEY (build_id, document_id)
+);
+
+CREATE TABLE IF NOT EXISTS asset_publish_releases (
+    id                   TEXT PRIMARY KEY,
+    release_code         TEXT NOT NULL UNIQUE,
+    build_id             TEXT NOT NULL REFERENCES asset_builds(id) ON DELETE RESTRICT,
+    channel              TEXT NOT NULL,
+    status               TEXT NOT NULL,
+    previous_release_id  TEXT REFERENCES asset_publish_releases(id) ON DELETE SET NULL,
+    released_by          TEXT,
+    release_notes        TEXT,
+    activated_at         TEXT,
+    deactivated_at       TEXT,
+    metadata_json        TEXT NOT NULL DEFAULT '{}'
 );
 
 CREATE TABLE IF NOT EXISTS asset_canonical_segments (
@@ -159,26 +192,44 @@ CREATE TABLE IF NOT EXISTS asset_canonical_segment_sources (
     UNIQUE (canonical_segment_id, raw_segment_id)
 );
 
-CREATE INDEX IF NOT EXISTS idx_asset_publish_versions_status
-    ON asset_publish_versions(status);
+CREATE INDEX IF NOT EXISTS idx_asset_documents_type
+    ON asset_documents(document_type);
 
-CREATE INDEX IF NOT EXISTS idx_asset_raw_documents_origin_batch
-    ON asset_raw_documents(origin_batch_id);
+CREATE INDEX IF NOT EXISTS idx_asset_document_snapshots_raw_hash
+    ON asset_document_snapshots(raw_content_hash);
 
-CREATE INDEX IF NOT EXISTS idx_asset_batch_documents_document
-    ON asset_batch_documents(document_id);
+CREATE INDEX IF NOT EXISTS idx_asset_document_snapshot_links_document
+    ON asset_document_snapshot_links(document_id, linked_at);
 
-CREATE INDEX IF NOT EXISTS idx_asset_raw_segments_document
-    ON asset_raw_segments(raw_document_id);
+CREATE INDEX IF NOT EXISTS idx_asset_document_snapshot_links_snapshot
+    ON asset_document_snapshot_links(document_snapshot_id, linked_at);
 
-CREATE INDEX IF NOT EXISTS idx_asset_raw_segment_relations_source
-    ON asset_raw_segment_relations(source_segment_id, relation_type);
+CREATE INDEX IF NOT EXISTS idx_asset_document_snapshot_links_batch
+    ON asset_document_snapshot_links(source_batch_id);
 
-CREATE INDEX IF NOT EXISTS idx_asset_retrieval_units_document
-    ON asset_retrieval_units(raw_document_id);
+CREATE INDEX IF NOT EXISTS idx_asset_raw_segments_snapshot
+    ON asset_raw_segments(document_snapshot_id);
+
+CREATE INDEX IF NOT EXISTS idx_asset_raw_segment_relations_snapshot
+    ON asset_raw_segment_relations(document_snapshot_id, relation_type);
+
+CREATE INDEX IF NOT EXISTS idx_asset_retrieval_units_snapshot
+    ON asset_retrieval_units(document_snapshot_id);
 
 CREATE INDEX IF NOT EXISTS idx_asset_retrieval_embeddings_unit
     ON asset_retrieval_embeddings(retrieval_unit_id);
+
+CREATE INDEX IF NOT EXISTS idx_asset_builds_status
+    ON asset_builds(status, created_at);
+
+CREATE INDEX IF NOT EXISTS idx_asset_build_document_snapshots_snapshot
+    ON asset_build_document_snapshots(document_snapshot_id);
+
+CREATE INDEX IF NOT EXISTS idx_asset_publish_releases_build
+    ON asset_publish_releases(build_id);
+
+CREATE INDEX IF NOT EXISTS idx_asset_publish_releases_channel_status
+    ON asset_publish_releases(channel, status);
 
 CREATE INDEX IF NOT EXISTS idx_asset_canonical_segment_sources_canonical
     ON asset_canonical_segment_sources(canonical_segment_id);

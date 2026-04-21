@@ -26,7 +26,8 @@ CREATE TABLE IF NOT EXISTS agent_llm_tasks (
     pipeline_stage    TEXT NOT NULL,
     ref_type          TEXT,
     ref_id            TEXT,
-    publish_version_id TEXT,
+    build_id          TEXT,
+    release_id        TEXT,
     request_id        TEXT,
     idempotency_key   TEXT,
     status            TEXT NOT NULL CHECK (

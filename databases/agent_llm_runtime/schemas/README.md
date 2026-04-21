@@ -38,6 +38,18 @@ Mining / Serving
   -> LLM Runtime 写 agent_llm_runtime
 ```
 
+当前与资产层的主要关联点是：
+
+- `ref_type / ref_id`
+- `build_id`
+- `release_id`
+
+也就是说，LLM 任务可以弱关联到：
+
+- 某个文档 / snapshot / retrieval unit
+- 某个 build
+- 某个 release
+
 而不是：
 
 ```text
