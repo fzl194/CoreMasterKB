@@ -1,6 +1,6 @@
 # LLM Service v1.1 交接文档
 
-> 状态：待 Codex 审查
+> 状态：已审查
 > 修订：2026-04-21 | Claude LLM
 
 ## 任务目标

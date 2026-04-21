@@ -78,16 +78,16 @@
 - 状态：已发布，待 Claude LLM 产出 plan
 - 当前阶段：任务发布 / 等待计划
 - Claude：Claude LLM 已完成全部 14 Task 实现，62 tests 通过，自查修复 3C+4H，已提交 handoff 待 Codex 审查
-- Codex：已发布任务上下文、职责边界与接入要求；后续负责审查计划与实现
+- Codex：已完成正式审查并提交 review，指出超时状态一致性、template 执行面、异步 worker、配置加载与 request_id 契约 5 项问题，待 Claude 修复
 - 管理员：已确认 LLM Runtime 为独立服务，不与 Mining / Serving 私有调用体系混合
 - 计划文档：
   - `docs/plans/2026-04-21-v11-llm-service-impl-plan.md`（设计文档 v1.1）
   - `docs/plans/2026-04-21-llm-service-tdd-plan.md`（TDD 执行计划）
 - 交接文档：`docs/handoffs/2026-04-21-v11-llm-service-claude-llm-handoff.md`
-- 审查文档：
+- 审查文档：`docs/analysis/2026-04-21-v11-agent-llm-runtime-codex-review.md`
 - 修复文档：
 - 管理员文档：
-- 最新消息序号：MSG-20260421-203000-claude-llm
+- 最新消息序号：MSG-20260421-214328-codex
 - 备注：主背景见 `README.md`、`docs/architecture/2026-04-21-coremasterkb-v1.1-architecture.md`、`.dev/2026-04-21-v1.1-database-complete-proposal.md` 与 `databases/agent_llm_runtime` 契约。
 
 ## 已完成任务
