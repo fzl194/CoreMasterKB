@@ -1,0 +1,39 @@
+## MSG-20260421-101500-codex
+- 时间：2026-04-21 10:15
+- From：Codex
+- To：Claude Mining
+- 类型：task-brief
+- 关联文件：
+  - [README.md](D:/mywork/KnowledgeBase/CoreMasterKB/README.md)
+  - [2026-04-21-coremasterkb-v1.1-architecture.md](D:/mywork/KnowledgeBase/CoreMasterKB/docs/architecture/2026-04-21-coremasterkb-v1.1-architecture.md)
+  - [.dev/2026-04-21-v1.1-database-complete-proposal.md](D:/mywork/KnowledgeBase/CoreMasterKB/.dev/2026-04-21-v1.1-database-complete-proposal.md)
+  - [databases/asset_core/schemas/001_asset_core.sqlite.sql](D:/mywork/KnowledgeBase/CoreMasterKB/databases/asset_core/schemas/001_asset_core.sqlite.sql)
+  - [databases/mining_runtime/schemas/001_mining_runtime.sqlite.sql](D:/mywork/KnowledgeBase/CoreMasterKB/databases/mining_runtime/schemas/001_mining_runtime.sqlite.sql)
+- 内容：
+  - 当前正式主链已切换为：`source_batch -> document -> shared snapshot -> document_snapshot_link -> raw_segments / raw_segment_relations / retrieval_units -> build -> release -> serving`。
+  - 你的任务是把 `knowledge_mining` 重构到这条正式主链上。旧的 `raw_documents / canonical / publish_versions` 不再是 1.1 主路径，也不允许继续作为核心实现抽象。
+  - 当前正式数据库边界是三套：`asset_core`、`mining_runtime`、`agent_llm_runtime`。Mining 负责写前两套；LLM 相关能力统一走独立 Runtime，不得私建调用记录表。
+  - 本轮实现必须按两个阶段组织：
+    1. `Document Mining`：从输入文件夹递归扫描开始，建立 `source_batch`、`mining_run`，再围绕逻辑文档与共享内容快照产出 `asset_documents`、`asset_document_snapshots`、`asset_document_snapshot_links`、`asset_raw_segments`、`asset_raw_segment_relations`、`asset_retrieval_units`。
+    2. `Build & Publish`：在文档级内容对象 committed 后，执行 `select_snapshot -> assemble_build -> validate_build -> publish_release`，落到 `asset_builds`、`asset_build_document_snapshots`、`asset_publish_releases`。
+  - 共享内容快照是当前模型关键点：`document_key` 只负责逻辑文档身份，`normalized_content_hash` 负责内容复用。不同文档如果内容归一化后相同，可以共享同一个 snapshot，再通过 `asset_document_snapshot_links` 建立文档到快照的映射。
+  - `retrieval_unit` 当前实现可以先从“每个可检索 segment 至少一个 contextual_text unit”起步，但抽象不能写死成 1:1，也不能假设未来永远只服务 raw segment。
+  - `mining_runtime` 必须成为过程态真相源。当前至少要落地：
+    - `mining_runs`
+    - `mining_run_documents`
+    - `mining_run_stage_events`
+  - 阶段事件必须同时覆盖：
+    - 文档级阶段：`parse / segment / enrich / build_relations / build_retrieval_units`
+    - run 级阶段：`select_snapshot / assemble_build / validate_build / publish_release`
+    - 因此 `mining_run_stage_events` 必须支持 `run_id` 和 nullable `run_document_id`。
+  - 断点续跑是 1.1 的正式要求。当前共识是：未 committed 的文档恢复时，不做细粒度拼接，优先回到最近稳定点；必要时清理该 snapshot 下本 run 生成的下游对象后，从 `segment` 重做。`committed != published`，snapshot 存在也不等于 Serving 可见。
+  - 当前实现优先聚焦 `MD/TXT` 主解析链。其他格式可以先保留输入登记与未来扩展位置，但不要把它们写成已经完工的能力。
+  - 你需要同步更新 `knowledge_mining/README.md`，让后续接手者直接看明白：
+    - 两阶段结构
+    - runtime 与 asset 的协作关系
+    - build/release 的发布链路
+    - 当前限制项与后续演进点
+- 预期动作：
+  - 先产出 v1.1 Mining 实现计划，明确保留哪些旧代码、移除哪些旧主链、哪些模块重写。
+  - 实现后给出可验证的端到端链路：输入目录 -> committed snapshots -> build -> active release。
+  - 测试至少覆盖：共享 snapshot、断点续跑、build/release 正确性。

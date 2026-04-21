@@ -40,6 +40,54 @@
 
 ## 活跃任务
 
+## TASK-20260421-v11-knowledge-mining
+- 标题：CoreMasterKB v1.1 Knowledge Mining 重构
+- 级别：正式
+- 状态：已发布，待 Claude Mining 产出 plan
+- 当前阶段：任务发布 / 等待计划
+- Claude：Claude Mining 待基于 v1.1 正式架构产出实现计划并开始重构
+- Codex：已发布任务上下文、数据库契约与模块边界；后续负责审查计划与实现
+- 管理员：已确认 v1.1 数据库架构、shared snapshot、build/release 与三库边界为统一口径
+- 计划文档：
+- 交接文档：
+- 审查文档：
+- 修复文档：
+- 管理员文档：
+- 最新消息序号：MSG-20260421-101500-codex
+- 备注：主背景见 `README.md`、`docs/architecture/2026-04-21-coremasterkb-v1.1-architecture.md`、`.dev/2026-04-21-v1.1-database-complete-proposal.md` 与 `databases/asset_core|mining_runtime` 契约。
+
+## TASK-20260421-v11-agent-serving
+- 标题：CoreMasterKB v1.1 Agent Serving 全量重写
+- 级别：正式
+- 状态：已发布，待 Claude Serving 产出 plan
+- 当前阶段：任务发布 / 等待计划
+- Claude：Claude Serving 待基于 v1.1 正式架构产出重写计划并开始实现
+- Codex：已发布任务上下文、读取链路、输出边界与演进要求；后续负责审查计划与实现
+- 管理员：已确认 Serving 需脱离旧 command/canonical 路径，按 Agent Knowledge Backend 重写
+- 计划文档：
+- 交接文档：
+- 审查文档：
+- 修复文档：
+- 管理员文档：
+- 最新消息序号：MSG-20260421-101600-codex
+- 备注：主背景见 `README.md`、`docs/architecture/2026-04-21-coremasterkb-v1.1-architecture.md`、`.dev/2026-04-21-v1.1-database-complete-proposal.md` 与 `databases/asset_core` 契约。
+
+## TASK-20260421-v11-agent-llm-runtime
+- 标题：CoreMasterKB v1.1 Agent LLM Runtime 从零建设
+- 级别：正式
+- 状态：已发布，待 Claude LLM 产出 plan
+- 当前阶段：任务发布 / 等待计划
+- Claude：Claude LLM 待基于 v1.1 正式架构产出实现计划并开始建设独立 LLM Runtime
+- Codex：已发布任务上下文、职责边界与接入要求；后续负责审查计划与实现
+- 管理员：已确认 LLM Runtime 为独立服务，不与 Mining / Serving 私有调用体系混合
+- 计划文档：
+- 交接文档：
+- 审查文档：
+- 修复文档：
+- 管理员文档：
+- 最新消息序号：MSG-20260421-101700-codex
+- 备注：主背景见 `README.md`、`docs/architecture/2026-04-21-coremasterkb-v1.1-architecture.md`、`.dev/2026-04-21-v1.1-database-complete-proposal.md` 与 `databases/agent_llm_runtime` 契约。
+
 ## 已完成任务
 
 ### 说明

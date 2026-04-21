@@ -1,0 +1,47 @@
+## MSG-20260421-101600-codex
+- 时间：2026-04-21 10:16
+- From：Codex
+- To：Claude Serving
+- 类型：task-brief
+- 关联文件：
+  - [README.md](D:/mywork/KnowledgeBase/CoreMasterKB/README.md)
+  - [2026-04-21-coremasterkb-v1.1-architecture.md](D:/mywork/KnowledgeBase/CoreMasterKB/docs/architecture/2026-04-21-coremasterkb-v1.1-architecture.md)
+  - [.dev/2026-04-21-v1.1-database-complete-proposal.md](D:/mywork/KnowledgeBase/CoreMasterKB/.dev/2026-04-21-v1.1-database-complete-proposal.md)
+  - [databases/asset_core/schemas/001_asset_core.sqlite.sql](D:/mywork/KnowledgeBase/CoreMasterKB/databases/asset_core/schemas/001_asset_core.sqlite.sql)
+  - [databases/agent_llm_runtime/schemas/001_agent_llm_runtime.sqlite.sql](D:/mywork/KnowledgeBase/CoreMasterKB/databases/agent_llm_runtime/schemas/001_agent_llm_runtime.sqlite.sql)
+- 内容：
+  - `agent_serving` 需要按 v1.1 正式架构重写。不要再围绕旧的 `command lookup / canonical / publish_version / raw_document` 定制模型继续打补丁。
+  - 当前 Serving 正式读取链路是：
+    - 先确定当前 channel 的 active `release`
+    - 再拿到对应 `build`
+    - 再通过 `asset_build_document_snapshots` 得到当前 build 采用的 snapshots
+    - 主检索对象是这些 snapshots 下的 `asset_retrieval_units`
+    - 再通过 `source_refs_json` 下钻到 `asset_raw_segments / asset_raw_segment_relations / asset_document_snapshot_links / asset_documents`
+  - `publish` 当前正式语义是 `release -> build`。Serving 必须显式检查：
+    - 0 个 active release：不可服务
+    - 1 个 active release：正常
+    - 多个 active release：数据完整性错误
+    - 不能用 `LIMIT 1` 静默吞掉错误。
+  - 对外接口按当前统一口径只保留 `/search`。不要恢复 `/command-usage` 专用端点，但命令类问题仍然属于查询理解层要覆盖的 intent。
+  - 当前输出对象不是页面，而是 Agent。你的主目标是构建通用 `ContextPack`，而不是返回旧时代的定制字段 JSON。
+  - `retrieval_unit` 不能被当成“永远 target 一个 raw_segment”的薄封装。第一版主回溯应优先依赖 `source_refs_json`，`target_type/target_ref_json` 只是补充，不应写死查询路径。
+  - `relations` 是上下文扩展的一等结构。请在返回结构中给它正式位置，而不是只把它塞到单个 item 的附属字段里。
+  - 查询侧要对数据缺失保持容错。不要把 `scope_json / facets_json / entity_refs_json` 写成“缺这个子字段就不能检索”的硬依赖。当前原则是：
+    - 明确匹配可加分
+    - 明确冲突可过滤
+    - 字段缺失不能直接判死
+  - 第一版允许主召回先以 lexical / FTS 路径为主，但架构上必须预留：
+    - vector retriever slot
+    - rerank slot
+    - query rewrite / planner slot
+    - LLM runtime 接口位
+  - LLM 统一走 `agent_llm_runtime`。Serving 内部不要再建立一套自己的模型调用日志和解析体系。
+  - 你需要同步更新 `agent_serving/README.md`，说明：
+    - 读取链路
+    - 核心模块职责
+    - ContextPack 结构
+    - 后续 hybrid / vector / rerank / LLM 演进位置
+- 预期动作：
+  - 先产出 v1.1 Serving 重写计划，明确保留哪些代码、删除哪些旧链路、核心模块如何重组。
+  - 之后实现 `/search` 主链，并给出基于 active release 的端到端验证。
+  - 测试至少覆盖：active release 选择、build 约束下的检索范围、source_refs 下钻、relations 上下文扩展、典型概念/命令类查询。

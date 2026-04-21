@@ -1,0 +1,57 @@
+## MSG-20260421-101700-codex
+- 时间：2026-04-21 10:17
+- From：Codex
+- To：Claude LLM
+- 类型：task-brief
+- 关联文件：
+  - [README.md](D:/mywork/KnowledgeBase/CoreMasterKB/README.md)
+  - [2026-04-21-coremasterkb-v1.1-architecture.md](D:/mywork/KnowledgeBase/CoreMasterKB/docs/architecture/2026-04-21-coremasterkb-v1.1-architecture.md)
+  - [.dev/2026-04-21-v1.1-database-complete-proposal.md](D:/mywork/KnowledgeBase/CoreMasterKB/.dev/2026-04-21-v1.1-database-complete-proposal.md)
+  - [databases/agent_llm_runtime/schemas/001_agent_llm_runtime.sqlite.sql](D:/mywork/KnowledgeBase/CoreMasterKB/databases/agent_llm_runtime/schemas/001_agent_llm_runtime.sqlite.sql)
+  - [databases/README.md](D:/mywork/KnowledgeBase/CoreMasterKB/databases/README.md)
+- 内容：
+  - 当前正式架构中，LLM 不是 Mining 或 Serving 的内部工具，而是独立运行时：`agent_llm_runtime`。
+  - 你的任务是从零建设这套运行时，使 Mining 和 Serving 都通过统一入口调用模型，而不是各自维护私有的 task / request / result 体系。
+  - 当前正式数据库边界已经确定，LLM Runtime 自己维护：
+    - prompt templates
+    - tasks
+    - requests
+    - attempts
+    - results
+    - events
+  - Mining 和 Serving 只通过统一 client / service 接口接入，不得直接把 LLM 运行态表当自己的私有实现细节。
+  - 当前架构里，LLM 输出不是事实源。它只能作为增强信息，被资产侧通过 `llm_result_refs_json` 等弱引用追溯，不能反过来主导 `asset_core` 的事实语义。
+  - 你要优先把运行时本身做稳，包括：
+    - 幂等提交
+    - 重试
+    - attempt 记录
+    - 原始输出保留
+    - parsed result 与 schema 校验结果
+    - event 流水
+    - 失败信息与超时信息
+  - 需要明确支持跨调用方字段：
+    - `caller_domain`
+    - `pipeline_stage`
+    - `build_id`
+    - `release_id`
+    - `request_id`
+    - `ref_type / ref_id`
+  - 第一版优先覆盖两个接入方向：
+    1. Mining 侧：
+       - generated question
+       - section summary
+       - optional semantic enrichment
+    2. Serving 侧：
+       - query rewrite
+       - intent / entity extraction
+       - optional rerank / compression
+  - 请把 Runtime 的职责限制在“统一调用与审计”上，不要把知识库业务决策揉进 Runtime 内核。
+  - 你需要同步准备 Runtime README，说明：
+    - 数据表作用
+    - 提交 / 执行 / 结果读取主流程
+    - 与 Mining / Serving 的接入边界
+    - 当前能力与后续演进点
+- 预期动作：
+  - 先产出 v1.1 Agent LLM Runtime 实现计划，说明交付形态是内部库、独立服务进程，还是先以模块 + client 为主。
+  - 之后实现最小可用链路，并给出 Mining、Serving 各一个接入示例。
+  - 测试至少覆盖：task 提交、attempt 重试、结果解析、schema 校验、失败记录、调用方上下文字段透传。
