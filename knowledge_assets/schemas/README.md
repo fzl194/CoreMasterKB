@@ -1,397 +1,303 @@
-# M1 Asset Core Schema
+# Asset Core Schema
 
-> 当前版本：v0.5
-> PostgreSQL SQL 定义：`knowledge_assets/schemas/001_asset_core.sql`
-> SQLite dev SQL 定义：`knowledge_assets/schemas/001_asset_core.sqlite.sql`
-> 适用任务：`TASK-20260415-m1-knowledge-mining`、`TASK-20260415-m1-agent-serving`
+> 当前版本：v1.1  
+> SQLite 契约：`knowledge_assets/schemas/001_asset_core.sqlite.sql`  
+> Generic SQL 基线：`knowledge_assets/schemas/001_asset_core.sql`
 
 ## 目标
 
-`knowledge_assets/schemas/` 是 Knowledge Mining 和 Agent Serving 的唯一数据库契约来源。
+`knowledge_assets/schemas/` 是 CoreMasterKB 当前共享的知识资产数据库契约来源。
 
-M1 阶段采用物理快照模型：每个 `publish_version` 都是一份完整可服务知识资产快照。Mining 写入 `staging` 版本，校验通过后原子切换为 `active`；Serving 只读唯一 `active` 版本。
+这版 schema 对应我们最新定下的 1.1 原则：
 
-M1 的输入基线是一个普通语料文件夹。Mining 递归发现 source artifacts，不依赖 `manifest.jsonl`、`html_to_md_mapping.json/csv` 或其他外部元数据文件。Markdown 和 TXT 在 M1 生成 `raw_segments`；HTML/PDF/DOC/DOCX 等先登记为 `raw_documents`，不生成切片。
+1. Asset 表只存当前 active 资产，不做历史全量快照。
+2. `asset_publish_versions` 只保留最小发布控制边界，不挂到每张资产表。
+3. Serving 主路径改为：
 
-本 schema 不定义 ontology、fact、embedding 或旧项目 evidence。L2 表命名为 `canonical_segment_sources`，表示 L1 归并段到 L0 原始段的来源映射、重复关系、scope 变体和冲突候选。
+```text
+asset_raw_documents
+  -> asset_raw_segments
+  -> asset_raw_segment_relations
+  -> asset_retrieval_units
+```
+
+4. `canonical` 两张表保留，但不再是 1.1 主路径。
+
+## 当前边界
+
+本目录当前只维护 **Knowledge Asset DB** 的共享契约。
+
+不在这里定义：
+
+- Mining Runtime DB
+- LLM Runtime DB
+- 本体 / fact / graph
+- 历史版本完整视图
 
 ## 表总览
 
-| 表 | 层级 | 作用 | Mining | Serving |
-|---|---:|---|---|---|
-| `asset.source_batches` | 输入批次 | 记录一次文件夹扫描/上传任务及批次默认参数 | 写入 | 审计可读 |
-| `asset.publish_versions` | 发布控制 | 记录一次完整资产快照，`active` 是 Serving 入口 | 写入 / 激活 | 读取 active |
-| `asset.raw_documents` | L0 文档 | 发布版本内每个源文件的文档级登记 | 写入 | 来源展示可读 |
-| `asset.raw_segments` | L0 切片 | Markdown/TXT 解析后的原始知识切片 | 写入 | 下钻读取 |
-| `asset.canonical_segments` | L1 归并段 | 去重归并后的主检索对象 | 写入 | 主检索 |
-| `asset.canonical_segment_sources` | L2 映射 | L1 到 L0 的来源、重复、变体和冲突关系 | 写入 | 下钻选择 |
+| 表 | 作用 | 说明 |
+|---|---|---|
+| `asset_source_batches` | 输入批次 | 记录一批输入文件夹/上传任务 |
+| `asset_publish_versions` | 发布控制 | 记录哪次构建成为 active |
+| `asset_batch_documents` | 批次-文档挂载 | 记录某批次发现了哪些文档 |
+| `asset_raw_documents` | 文档事实源 | 当前 active 文档集合 |
+| `asset_raw_segments` | 片段事实源 | 当前 active 片段集合 |
+| `asset_raw_segment_relations` | 片段关系 | 用于上下文扩展 |
+| `asset_retrieval_units` | 主检索入口 | Serving 默认检索对象 |
+| `asset_retrieval_units_fts` | 全文索引 | SQLite FTS5 |
+| `asset_retrieval_embeddings` | 向量挂载 | 预留，不是 1.1 必做 |
+| `asset_canonical_segments` | 旧兼容表 | 保留但不走主路径 |
+| `asset_canonical_segment_sources` | 旧兼容表 | 保留但不走主路径 |
 
-SQLite dev mode 使用同语义前缀表名：
+## 设计原则
 
-| PostgreSQL 表 | SQLite dev 表 |
-|---|---|
-| `asset.source_batches` | `asset_source_batches` |
-| `asset.publish_versions` | `asset_publish_versions` |
-| `asset.raw_documents` | `asset_raw_documents` |
-| `asset.raw_segments` | `asset_raw_segments` |
-| `asset.canonical_segments` | `asset_canonical_segments` |
-| `asset.canonical_segment_sources` | `asset_canonical_segment_sources` |
+## 1. Asset 表不带 `publish_version_id`
 
-## 版本模型
+当前 active 资产不通过“按版本过滤大表”实现，而通过发布切换实现。
 
-`source_batch` 和 `publish_version` 是两个不同概念。
+因此：
 
-| 概念 | 含义 |
-|---|---|
-| `source_batch` | 本次输入文件夹、上传批次或扫描任务，以及批次级默认上下文 |
-| `publish_version` | 本次发布后 Serving 可读取的完整知识库快照 |
+- `asset_raw_documents` 不带 `publish_version_id`
+- `asset_raw_segments` 不带 `publish_version_id`
+- `asset_raw_segment_relations` 不带 `publish_version_id`
+- `asset_retrieval_units` 不带 `publish_version_id`
 
-M1 发布规则：
+## 2. `asset_publish_versions` 的职责收缩
 
-| 步骤 | 动作 |
-|---|---|
-| 1 | 读取当前唯一 `active` 版本，第一次发布时为空 |
-| 2 | 创建新的 `source_batch` 和 `staging` publish version |
-| 3 | 递归扫描输入文件夹，登记所有支持识别的 source artifacts 到 `raw_documents` |
-| 4 | 只对 Markdown/TXT 生成 `raw_segments` |
-| 5 | 基于新版本完整 L0 全量重建 L1 `canonical_segments` |
-| 6 | 基于新版本 L1/L0 全量重建 L2 `canonical_segment_sources` |
-| 7 | 校验 L0/L1/L2 完整性 |
-| 8 | 事务切换旧 `active` 为 `archived`，新 `staging` 为 `active` |
-| 9 | 构建失败时标记新版本 `failed`，旧 `active` 保持不变 |
+`asset_publish_versions` 只负责：
 
-M1 可先全量物理快照，不要求本轮实现未变化文档复制；`copied_from_document_id` 和 `copied_from_segment_id` 为后续增量复制预留。
+1. 标识哪次构建成为 active
+2. 记录 old active -> archived / new staging -> active
+3. 记录发布历史、构建摘要、可选发布包路径
 
-## source_batches
+它不负责：
 
-`source_batches.metadata_json` 记录批次级默认参数。用户在前端填写的“这一批属于命令”“这一批属于某个网元/项目”等信息写在这里，再由 Mining 合并到文档画像。
+1. 表达每个版本完整对象集合
+2. 表达每条 raw / retrieval unit 属于哪个版本
 
-示例：
+## 3. Serving 主检索入口是 `asset_retrieval_units`
+
+Serving 1.1 不应该继续默认检索 canonical。
+
+推荐读取链路：
+
+```text
+retrieval_units
+  -> source_refs_json
+  -> raw_segments
+  -> raw_documents
+  -> raw_segment_relations
+```
+
+## 4. `canonical` 保留但降级
+
+为了兼容历史数据和人工排查，以下两张表仍保留：
+
+- `asset_canonical_segments`
+- `asset_canonical_segment_sources`
+
+但它们不再代表 1.1 的主检索主链路。
+
+## 关键字段说明
+
+## `asset_source_batches`
+
+记录输入身份，而不是运行时状态。
+
+典型 `metadata_json`：
 
 ```json
 {
-  "ingest_mode": "folder_scan",
-  "storage_root_uri": "storage://uploads/batch_20260417_001",
-  "original_root_name": "核心网命令资料",
   "default_document_type": "command",
-  "default_source_type": "manual_upload",
   "batch_scope": {
-    "product": "CloudCore",
-    "product_version": "V100R023",
-    "network_elements": ["SMF", "UPF"],
-    "project": "项目A"
+    "products": ["CloudCore"],
+    "product_versions": ["V100R023"],
+    "network_elements": ["PGW-C"]
   },
   "tags": ["command", "core_network"]
 }
 ```
 
-## raw_documents
+## `asset_publish_versions`
 
-`raw_documents` 记录每个源文件，不只记录已解析文件。M1 必须识别并登记：
+关键字段：
+
+- `status`: `staging / active / archived / failed`
+- `base_publish_version_id`: 发布链上的上一个 active
+- `source_batch_id`: 主要来源批次
+- `metadata_json`: 质量门控摘要、构建统计、可选发布包路径
+
+这张表和资产主表没有直接外键挂载关系。
+
+## `asset_raw_documents`
+
+当前 active 文档对象。
+
+重点字段：
+
+- `document_key`: 稳定文档键，通常取规范化相对路径
+- `source_uri`: 实际读取位置
+- `relative_path`: 相对本批次根目录路径
+- `origin_batch_id`: 首次来源批次
+- `processing_profile_json`: 解析/转换/抽取过程信息
+
+## `asset_batch_documents`
+
+用于回答：
+
+- 某批次发现了哪些文档
+- 某个文档曾出现在哪些批次
+
+也是后续增量发现和批次级清理的基础。
+
+## `asset_raw_segments`
+
+片段事实源。
+
+重点字段：
+
+- `segment_key`
+- `section_path`
+- `block_type`
+- `semantic_role`
+- `raw_text`
+- `normalized_text`
+- `structure_json`
+- `source_offsets_json`
+- `entity_refs_json`
+
+当前允许的 `block_type`：
 
 ```text
-.md / .markdown / .txt / .html / .htm / .pdf / .doc / .docx
+paragraph
+heading
+table
+list
+code
+blockquote
+html_table
+raw_html
+unknown
 ```
 
-| 字段 | 说明 |
-|---|---|
-| `document_key` | 稳定文档身份；M1 使用规范化 `relative_path` |
-| `source_uri` | 后端实际读取位置 |
-| `relative_path` | 相对本批次输入根目录路径 |
-| `file_name` | 文件名 |
-| `file_type` | `markdown/html/pdf/doc/docx/txt/other` |
-| `source_type` | 来源方式，如 `manual_upload/folder_scan/official_vendor/expert_authored` |
-| `title` | 文档标题，可由 H1、文件名或内容推断 |
-| `document_type` | 内容类型，如 `command/feature/procedure/troubleshooting/expert_note/reference` |
-| `content_hash` | 文件内容 hash，不是路径 hash |
-| `scope_json` | 产品、版本、网元、项目、场景、作者等通用上下文 |
-| `tags_json` | 标签 |
-| `structure_quality` | `markdown_native/plain_text_only/full_html/mixed/unknown` |
-| `processing_profile_json` | parser、normalization、extraction quality 等处理过程 |
-| `metadata_json` | `parse_status/skip_reason/inferred_by` 等扩展 |
+当前允许的 `semantic_role`：
 
-产品、版本、网元不再作为外层字段，统一进入 `scope_json`：
+```text
+concept
+parameter
+example
+note
+procedure_step
+troubleshooting_step
+constraint
+alarm
+checklist
+unknown
+```
+
+## `asset_raw_segment_relations`
+
+它不是本体关系，而是篇章/上下文关系。
+
+1.1 最小推荐关系：
+
+```text
+previous
+next
+same_section
+same_parent_section
+section_header_of
+```
+
+本版另外预留了：
+
+```text
+references
+elaborates
+condition
+contrast
+other
+```
+
+## `asset_retrieval_units`
+
+这是 1.1 的主检索对象。
+
+典型用途：
+
+- `raw_text`
+- `contextual_text`
+- `summary`
+- `generated_question`
+- `entity_card`
+- `table_row`
+
+重点字段：
+
+- `unit_key`
+- `unit_type`
+- `target_type`
+- `target_id`
+- `title`
+- `text`
+- `search_text`
+- `facets_json`
+- `entity_refs_json`
+- `source_refs_json`
+- `llm_result_refs_json`
+
+要求：
+
+- 每个可检索片段至少应有一个 retrieval unit
+- `search_text` 应包含足够的上下文化检索信息
+
+## `asset_retrieval_units_fts`
+
+这是 SQLite FTS5 虚拟表。
+
+通过 trigger 与 `asset_retrieval_units` 自动同步。
+
+当前索引字段：
+
+- `title`
+- `text`
+- `search_text`
+
+## 发布与回退边界
+
+当前 schema 只支持：
+
+1. 当前 active 资产服务
+2. 发布历史元信息记录
+3. 数据来源追溯
+
+当前 schema **不支持**：
+
+1. 任意历史版本在线查询
+2. 任意历史版本完整对象集合恢复
+
+如果需要最低限度回退，建议在 `asset_publish_versions.metadata_json` 中记录发布包：
 
 ```json
 {
-  "products": ["CloudCore"],
-  "product_versions": ["V100R023"],
-  "network_elements": ["SMF", "UPF"],
-  "projects": ["项目A"],
-  "domains": [],
-  "scenarios": ["N4 interface"],
-  "authors": []
+  "bundle_path": "storage://asset-bundles/v11.sqlite",
+  "bundle_checksum": "sha256:..."
 }
 ```
 
-M1 统一约定：Mining 写入时优先使用 plural 数组字段；Serving 读取时必须兼容历史或上游可能出现的 singular 字段，例如 `product/product_version/project/domain/scenario/author`。Serving 不得因为某个 scope 子字段缺失就判定文档不可检索；scope 是过滤和排序增强信号，不是基础召回的唯一前提。
+## 本目录清理结果
 
-`source_uri` 和 `relative_path` 的区别：
+`knowledge_assets` 当前只保留仍然有价值的内容：
 
-| 字段 | 含义 | 稳定性 |
-|---|---|---:|
-| `source_uri` | 后端实际读取位置，如上传存储 URI 或扫描路径 | 不稳定 |
-| `relative_path` | 相对本批次根目录路径 | 相对稳定 |
+- `schemas/`
+- `dictionaries/`
+- `samples/`
 
-## raw_segments
+已废弃的空目录如 `manifests/`、`migrations/` 已移除。
 
-`raw_segments` 是 Markdown/TXT 解析后的原始知识切片。HTML/PDF/DOC/DOCX 在 M1 只登记 `raw_documents`，不生成 `raw_segments`。
+## 说明
 
-| 字段 | 说明 |
-|---|---|
-| `segment_key` | 文档内稳定切片 key |
-| `segment_index` | 文档内顺序 |
-| `section_path` | 结构化章节路径，建议元素包含 `title` 和 `level` |
-| `section_title` | 当前章节标题 |
-| `block_type` | 结构类型 |
-| `semantic_role` | 语义角色 |
-| `raw_text` | 原文 |
-| `normalized_text` | 规范化文本 |
-| `content_hash` | 原文 hash |
-| `normalized_hash` | 规范化文本 hash |
-| `structure_json` | 表格、列表、代码等结构元数据 |
-| `source_offsets_json` | parser、block index、行号等来源位置 |
-| `entity_refs_json` | 命令、网元、术语、特性等实体引用 |
-| `metadata_json` | 其他扩展 |
+当前本目录完成的是 **共享 schema 契约切换** 和 **SQLite 基线库重建**。
 
-`block_type`：
-
-```text
-paragraph / table / list / code / blockquote / html_table / raw_html / unknown
-```
-
-`semantic_role`：
-
-```text
-concept / parameter / example / note / procedure_step / troubleshooting_step / constraint / alarm / checklist / unknown
-```
-
-`entity_refs_json` 示例：
-
-```json
-[
-  {"type": "command", "name": "ADD APN", "normalized_name": "ADD APN"},
-  {"type": "network_element", "name": "SMF", "normalized_name": "SMF"},
-  {"type": "term", "name": "DNN", "normalized_name": "dnn"}
-]
-```
-
-`normalized_name` 推荐由 Mining 写入，但 Serving 读取时不得强依赖。若缺失，Serving 应使用 `name` 做轻量归一化后匹配；若 `entity_refs_json` 整体为空，Serving 仍应退回 `search_text/canonical_text/title/keywords` 等文本召回。
-
-`structure_json` 最低约定：
-
-| `block_type` | `structure_json` 建议 |
-|---|---|
-| `paragraph` | `{"paragraph_count": 2}` |
-| `list` | `{"ordered": true, "items": ["步骤1", "步骤2"]}` |
-| `table` | `{"columns": [...], "rows": [...], "row_count": 2, "col_count": 2}` |
-| `code` | `{"language": "mml"}` |
-| `html_table` | `{"raw_html_preserved": true, "row_count": 3, "col_count": 2}` |
-
-更完整的 Markdown table 建议格式：
-
-```json
-{
-  "kind": "markdown_table",
-  "columns": ["参数标识", "参数名称", "参数说明"],
-  "rows": [
-    {
-      "参数标识": "APNNAME",
-      "参数名称": "APN 名称",
-      "参数说明": "必选参数。指定 APN 标识。"
-    }
-  ],
-  "row_count": 1,
-  "col_count": 3
-}
-```
-
-Serving 必须把 `structure_json` 作为 evidence 的一部分原样返回给 Agent；没有结构时返回空对象，不阻断检索。
-
-`source_offsets_json` 最低约定：
-
-```json
-{
-  "parser": "markdown",
-  "block_index": 3,
-  "line_start": 7,
-  "line_end": 11
-}
-```
-
-如果 parser 能提供字符偏移，可追加：
-
-```json
-{
-  "char_start": 120,
-  "char_end": 260
-}
-```
-
-## canonical_segments
-
-`canonical_segments` 是 Serving 主检索对象。它不是简单复制某个 raw segment，而是多个 raw segments 的服务视角归并结果。
-
-| 字段 | 说明 |
-|---|---|
-| `canonical_key` | 稳定 canonical key |
-| `block_type` | 主结构类型 |
-| `semantic_role` | 语义角色 |
-| `title` | 标题 |
-| `canonical_text` | 标准正文 |
-| `summary` | 摘要 |
-| `search_text` | 检索文本 |
-| `entity_refs_json` | 多个 raw 来源实体的去重合集 |
-| `scope_json` | 多个 raw 来源文档 scope 的合并结果 |
-| `has_variants` | 是否存在需要区分的变体 |
-| `variant_policy` | 变体选择策略 |
-| `quality_score` | 质量分 |
-| `metadata_json` | canonicalization 方法、主来源、scope 合并策略等 |
-
-`variant_policy`：
-
-```text
-none / prefer_latest / require_scope / require_disambiguation / manual_review
-```
-
-canonical JSON 聚合规则：
-
-| 字段 | 聚合规则 |
-|---|---|
-| `entity_refs_json` | 对所有来源 raw segment 的 `entity_refs_json` 按 `type + normalized_name` 去重，可记录 `source_count` |
-| `scope_json` | 对所有来源 raw document 的 `scope_json` 合并；数组去重 union，冲突写入 `metadata_json.scope_merge.conflicts` |
-| `metadata_json` | 记录 `canonicalization.method/source_count/primary_raw_segment_id/scope_merge` 等归并信息 |
-
-结构细节保留在 `raw_segments.structure_json`。canonical 层只保留 `block_type` 和必要的结构摘要，不复制所有 raw 结构。
-
-## canonical_segment_sources
-
-`canonical_segment_sources` 记录 canonical 与 raw segment 的来源关系。
-
-`relation_type`：
-
-```text
-primary / exact_duplicate / normalized_duplicate / near_duplicate / scope_variant / conflict_candidate
-```
-
-| 字段 | 说明 |
-|---|---|
-| `canonical_segment_id` | 指向 L1 |
-| `raw_segment_id` | 指向 L0 |
-| `relation_type` | 来源关系 |
-| `is_primary` | 是否主来源；每个 canonical 必须有且只有一个 primary |
-| `priority` | 来源优先级；primary 应为最高优先级 |
-| `similarity_score` | 相似度 |
-| `diff_summary` | 差异摘要 |
-| `metadata_json` | 变体维度、scope 差异、算法信息 |
-
-scope 差异示例：
-
-```json
-{
-  "variant_dimensions": ["product_version", "network_elements"],
-  "primary_scope": {
-    "product_version": "V1",
-    "network_elements": ["SMF"]
-  },
-  "source_scope": {
-    "product_version": "V2",
-    "network_elements": ["UPF"]
-  }
-}
-```
-
-## Serving 读取规则
-
-Serving 不读取多个版本拼接结果，也不读取 `staging` 或 `failed`。
-
-每次请求先确定唯一 active version：
-
-```sql
-SELECT id
-FROM asset.publish_versions
-WHERE status = 'active';
-```
-
-之后所有资产查询都必须带：
-
-```text
-publish_version_id = :active_publish_version_id
-```
-
-主路径：
-
-```text
-active publish_version
-  -> asset.canonical_segments
-  -> asset.canonical_segment_sources
-  -> asset.raw_segments
-  -> asset.raw_documents
-```
-
-Serving 不读取文件系统，不依赖 `source_uri` 打开原文件；Serving 只读 DB 中已经发布的 `canonical_text/raw_text/structure_json/source_offsets_json/relative_path`。
-
-Serving 读取 JSON 字段时遵守容错原则：
-
-| 字段 | Serving 读取规则 |
-|---|---|
-| `scope_json` | 兼容 plural/singular；缺失字段不阻断基础召回，只影响 scope 过滤和排序。 |
-| `entity_refs_json` | 优先按 `type + normalized_name` 匹配；`normalized_name` 缺失时 fallback 到 `name`。 |
-| `structure_json` | 原样返回给 Agent；缺失时返回 `{}`。 |
-| `source_offsets_json` | 原样返回给 Agent；缺失时返回 `{}`。 |
-| `processing_profile_json` | 用于来源解释和质量提示，不作为检索硬依赖。 |
-
-当 `relation_type = 'scope_variant'` 且查询 scope 不充分时，该来源应进入 variants/gaps，而不是普通 evidence。`relation_type = 'conflict_candidate'` 永远不能进入普通 evidence，只能进入 conflicts。
-
-## M1 边界
-
-M1 必须做：
-
-| 项 | 要求 |
-|---|---|
-| 输入 | 普通文件夹递归扫描 |
-| 文件登记 | 所有识别文件登记 `raw_documents` |
-| 解析 | 只对 Markdown/TXT 生成 `raw_segments` |
-| 归并 | exact / normalized / scope variant 基础归并 |
-| 发布 | staging -> active，failed 不影响旧 active |
-| 契约 | Mining 生成 DB，Serving 读取 active canonical 并下钻来源 |
-
-M1 明确不做：
-
-| 不做 |
-|---|
-| HTML/PDF/DOCX 深度解析 |
-| embedding |
-| LLM 抽取事实 |
-| ontology / graph |
-| 命令参数强结构化抽取 |
-| 增量复制 |
-| 前端上传实现 |
-| 外部元数据文件适配 |
-
-## 关键约束
-
-| 约束 | 目的 |
-|---|---|
-| 全局最多一个 `active` publish version | Serving 始终有唯一读取入口 |
-| `raw_documents(publish_version_id, document_key)` 唯一 | 同一版本内文档身份唯一 |
-| `raw_segments(publish_version_id, raw_document_id, segment_key)` 唯一 | 同一文档内切片身份唯一 |
-| `canonical_segments(publish_version_id, canonical_key)` 唯一 | 同一版本内 L1 归并对象唯一 |
-| L2 复合外键带 `publish_version_id` | 防止 L1/L0 跨版本映射 |
-
-## 测试要求
-
-管理员会安排专人准备普通混合测试文件夹，不包含 `manifest.jsonl`、`html_to_md_mapping.json/csv` 或其他外部元数据文件。
-
-Claude Mining 必须基于该测试文件夹验收：
-
-| 场景 | 期望 |
-|---|---|
-| md/txt/html/pdf/docx 混合目录 | 全部登记 `raw_documents` |
-| MD/TXT | 生成 `raw_segments` |
-| HTML/PDF/DOCX | 只登记，不切片 |
-| 连续发布两次 | 旧 active archived，新 active 唯一 |
-| 失败发布 | 新版本 failed，旧 active 不变 |
-| Mining -> SQLite -> Serving | Serving 能读取 canonical 并下钻 raw/document |
-
-任何 schema 变更都必须同步更新 PostgreSQL DDL、SQLite DDL、本 README、架构文档，并在 Mining 与 Serving 两个任务消息文件中说明兼容性影响。
+Mining/Serving 代码是否已完全切到这套 1.1 主路径，是后续代码演进工作，不由本 README 自动保证。

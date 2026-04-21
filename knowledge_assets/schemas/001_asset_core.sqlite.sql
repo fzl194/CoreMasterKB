@@ -1,15 +1,17 @@
--- CoreMasterKB M1 Asset Core Schema v0.5 - SQLite dev mode
+-- CoreMasterKB Asset Core Schema v1.1 - SQLite
 --
--- This file mirrors the PostgreSQL asset schema with SQLite-compatible
--- types and table names. Mining and Serving must use this shared dev DDL
--- instead of maintaining private SQLite copies.
+-- Current policy:
+-- 1. Asset tables store only current active assets.
+-- 2. asset_publish_versions is publish-control metadata, not per-row version ownership.
+-- 3. Retrieval path: raw_documents -> raw_segments -> raw_segment_relations -> retrieval_units.
+-- 4. canonical tables are retained only as non-primary compatibility tables.
 
 PRAGMA foreign_keys = ON;
 
 CREATE TABLE IF NOT EXISTS asset_source_batches (
-    id              TEXT PRIMARY KEY,
-    batch_code      TEXT NOT NULL UNIQUE,
-    source_type     TEXT NOT NULL CHECK (
+    id            TEXT PRIMARY KEY,
+    batch_code    TEXT NOT NULL UNIQUE,
+    source_type   TEXT NOT NULL CHECK (
         source_type IN (
             'manual_upload',
             'folder_scan',
@@ -21,10 +23,10 @@ CREATE TABLE IF NOT EXISTS asset_source_batches (
             'other'
         )
     ),
-    description     TEXT,
-    created_by      TEXT,
-    created_at      TEXT NOT NULL,
-    metadata_json   TEXT NOT NULL DEFAULT '{}'
+    description   TEXT,
+    created_by    TEXT,
+    created_at    TEXT NOT NULL,
+    metadata_json TEXT NOT NULL DEFAULT '{}'
 );
 
 CREATE TABLE IF NOT EXISTS asset_publish_versions (
@@ -48,20 +50,18 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_asset_publish_versions_one_active
 CREATE INDEX IF NOT EXISTS idx_asset_publish_versions_status
     ON asset_publish_versions(status);
 
-CREATE INDEX IF NOT EXISTS idx_asset_publish_versions_base
-    ON asset_publish_versions(base_publish_version_id);
-
 CREATE INDEX IF NOT EXISTS idx_asset_publish_versions_source_batch
     ON asset_publish_versions(source_batch_id);
 
 CREATE TABLE IF NOT EXISTS asset_raw_documents (
     id                      TEXT PRIMARY KEY,
-    publish_version_id      TEXT NOT NULL REFERENCES asset_publish_versions(id) ON DELETE CASCADE,
-    document_key            TEXT NOT NULL,
+    document_key            TEXT NOT NULL UNIQUE,
     source_uri              TEXT NOT NULL,
     relative_path           TEXT NOT NULL,
     file_name               TEXT NOT NULL,
-    file_type               TEXT NOT NULL CHECK (file_type IN ('markdown', 'html', 'pdf', 'doc', 'docx', 'txt', 'other')),
+    file_type               TEXT NOT NULL CHECK (
+        file_type IN ('markdown', 'html', 'pdf', 'doc', 'docx', 'txt', 'other')
+    ),
     source_type             TEXT CHECK (
         source_type IS NULL OR
         source_type IN (
@@ -95,9 +95,9 @@ CREATE TABLE IF NOT EXISTS asset_raw_documents (
         )
     ),
     content_hash            TEXT NOT NULL,
-    copied_from_document_id TEXT REFERENCES asset_raw_documents(id) ON DELETE SET NULL,
     origin_batch_id         TEXT REFERENCES asset_source_batches(id) ON DELETE SET NULL,
     created_at              TEXT NOT NULL,
+    updated_at              TEXT NOT NULL,
     scope_json              TEXT NOT NULL DEFAULT '{}',
     tags_json               TEXT NOT NULL DEFAULT '[]',
     structure_quality       TEXT NOT NULL DEFAULT 'unknown' CHECK (
@@ -110,74 +110,231 @@ CREATE TABLE IF NOT EXISTS asset_raw_documents (
         )
     ),
     processing_profile_json TEXT NOT NULL DEFAULT '{}',
-    metadata_json           TEXT NOT NULL DEFAULT '{}',
-    UNIQUE (publish_version_id, document_key),
-    UNIQUE (id, publish_version_id)
+    metadata_json           TEXT NOT NULL DEFAULT '{}'
 );
-
-CREATE INDEX IF NOT EXISTS idx_asset_raw_documents_publish_version
-    ON asset_raw_documents(publish_version_id);
 
 CREATE INDEX IF NOT EXISTS idx_asset_raw_documents_origin_batch
     ON asset_raw_documents(origin_batch_id);
 
 CREATE INDEX IF NOT EXISTS idx_asset_raw_documents_content_hash
-    ON asset_raw_documents(publish_version_id, content_hash);
-
-CREATE INDEX IF NOT EXISTS idx_asset_raw_documents_source_type
-    ON asset_raw_documents(publish_version_id, source_type);
-
-CREATE INDEX IF NOT EXISTS idx_asset_raw_documents_file_type
-    ON asset_raw_documents(publish_version_id, file_type);
-
-CREATE INDEX IF NOT EXISTS idx_asset_raw_documents_document_type
-    ON asset_raw_documents(publish_version_id, document_type);
+    ON asset_raw_documents(content_hash);
 
 CREATE INDEX IF NOT EXISTS idx_asset_raw_documents_relative_path
-    ON asset_raw_documents(publish_version_id, relative_path);
+    ON asset_raw_documents(relative_path);
 
-CREATE TABLE IF NOT EXISTS asset_raw_segments (
-    id                     TEXT PRIMARY KEY,
-    publish_version_id     TEXT NOT NULL REFERENCES asset_publish_versions(id) ON DELETE CASCADE,
-    raw_document_id        TEXT NOT NULL,
-    segment_key            TEXT NOT NULL,
-    segment_index          INTEGER NOT NULL CHECK (segment_index >= 0),
-    section_path           TEXT NOT NULL DEFAULT '[]',
-    section_title          TEXT,
-    block_type             TEXT NOT NULL DEFAULT 'unknown' CHECK (block_type IN ('paragraph', 'table', 'list', 'code', 'blockquote', 'html_table', 'raw_html', 'unknown')),
-    semantic_role          TEXT NOT NULL DEFAULT 'unknown' CHECK (semantic_role IN ('concept', 'parameter', 'example', 'note', 'procedure_step', 'troubleshooting_step', 'constraint', 'alarm', 'checklist', 'unknown')),
-    raw_text               TEXT NOT NULL,
-    normalized_text        TEXT NOT NULL,
-    content_hash           TEXT NOT NULL,
-    normalized_hash        TEXT NOT NULL,
-    token_count            INTEGER CHECK (token_count IS NULL OR token_count >= 0),
-    copied_from_segment_id TEXT REFERENCES asset_raw_segments(id) ON DELETE SET NULL,
-    structure_json         TEXT NOT NULL DEFAULT '{}',
-    source_offsets_json    TEXT NOT NULL DEFAULT '{}',
-    entity_refs_json       TEXT NOT NULL DEFAULT '[]',
-    metadata_json          TEXT NOT NULL DEFAULT '{}',
-    FOREIGN KEY (raw_document_id, publish_version_id)
-        REFERENCES asset_raw_documents(id, publish_version_id)
-        ON DELETE CASCADE,
-    UNIQUE (publish_version_id, raw_document_id, segment_key),
-    UNIQUE (id, publish_version_id)
+CREATE INDEX IF NOT EXISTS idx_asset_raw_documents_file_type
+    ON asset_raw_documents(file_type);
+
+CREATE INDEX IF NOT EXISTS idx_asset_raw_documents_document_type
+    ON asset_raw_documents(document_type);
+
+CREATE TABLE IF NOT EXISTS asset_batch_documents (
+    batch_id       TEXT NOT NULL REFERENCES asset_source_batches(id) ON DELETE CASCADE,
+    document_id    TEXT NOT NULL REFERENCES asset_raw_documents(id) ON DELETE CASCADE,
+    content_hash   TEXT NOT NULL,
+    discovered_at  TEXT NOT NULL,
+    PRIMARY KEY (batch_id, document_id)
 );
 
-CREATE INDEX IF NOT EXISTS idx_asset_raw_segments_publish_document
-    ON asset_raw_segments(publish_version_id, raw_document_id);
+CREATE INDEX IF NOT EXISTS idx_asset_batch_documents_document
+    ON asset_batch_documents(document_id);
+
+CREATE TABLE IF NOT EXISTS asset_raw_segments (
+    id                  TEXT PRIMARY KEY,
+    raw_document_id     TEXT NOT NULL REFERENCES asset_raw_documents(id) ON DELETE CASCADE,
+    segment_key         TEXT NOT NULL,
+    segment_index       INTEGER NOT NULL CHECK (segment_index >= 0),
+    section_path        TEXT NOT NULL DEFAULT '[]',
+    section_title       TEXT,
+    block_type          TEXT NOT NULL DEFAULT 'unknown' CHECK (
+        block_type IN ('paragraph', 'heading', 'table', 'list', 'code', 'blockquote', 'html_table', 'raw_html', 'unknown')
+    ),
+    semantic_role       TEXT NOT NULL DEFAULT 'unknown' CHECK (
+        semantic_role IN (
+            'concept',
+            'parameter',
+            'example',
+            'note',
+            'procedure_step',
+            'troubleshooting_step',
+            'constraint',
+            'alarm',
+            'checklist',
+            'unknown'
+        )
+    ),
+    raw_text            TEXT NOT NULL,
+    normalized_text     TEXT NOT NULL,
+    content_hash        TEXT NOT NULL,
+    normalized_hash     TEXT NOT NULL,
+    token_count         INTEGER CHECK (token_count IS NULL OR token_count >= 0),
+    structure_json      TEXT NOT NULL DEFAULT '{}',
+    source_offsets_json TEXT NOT NULL DEFAULT '{}',
+    entity_refs_json    TEXT NOT NULL DEFAULT '[]',
+    metadata_json       TEXT NOT NULL DEFAULT '{}',
+    UNIQUE (raw_document_id, segment_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_asset_raw_segments_document
+    ON asset_raw_segments(raw_document_id);
+
+CREATE INDEX IF NOT EXISTS idx_asset_raw_segments_document_index
+    ON asset_raw_segments(raw_document_id, segment_index);
 
 CREATE INDEX IF NOT EXISTS idx_asset_raw_segments_normalized_hash
-    ON asset_raw_segments(publish_version_id, normalized_hash);
+    ON asset_raw_segments(normalized_hash);
 
 CREATE INDEX IF NOT EXISTS idx_asset_raw_segments_block_role
-    ON asset_raw_segments(publish_version_id, block_type, semantic_role);
+    ON asset_raw_segments(block_type, semantic_role);
 
+CREATE TABLE IF NOT EXISTS asset_raw_segment_relations (
+    id                 TEXT PRIMARY KEY,
+    source_segment_id  TEXT NOT NULL REFERENCES asset_raw_segments(id) ON DELETE CASCADE,
+    target_segment_id  TEXT NOT NULL REFERENCES asset_raw_segments(id) ON DELETE CASCADE,
+    relation_type      TEXT NOT NULL CHECK (
+        relation_type IN (
+            'previous',
+            'next',
+            'same_section',
+            'same_parent_section',
+            'section_header_of',
+            'references',
+            'elaborates',
+            'condition',
+            'contrast',
+            'other'
+        )
+    ),
+    weight             REAL NOT NULL DEFAULT 1.0,
+    confidence         REAL NOT NULL DEFAULT 1.0,
+    distance           INTEGER,
+    metadata_json      TEXT NOT NULL DEFAULT '{}',
+    UNIQUE (source_segment_id, target_segment_id, relation_type)
+);
+
+CREATE INDEX IF NOT EXISTS idx_asset_raw_segment_relations_source
+    ON asset_raw_segment_relations(source_segment_id, relation_type);
+
+CREATE INDEX IF NOT EXISTS idx_asset_raw_segment_relations_target
+    ON asset_raw_segment_relations(target_segment_id, relation_type);
+
+CREATE TABLE IF NOT EXISTS asset_retrieval_units (
+    id                   TEXT PRIMARY KEY,
+    unit_key             TEXT NOT NULL,
+    unit_type            TEXT NOT NULL CHECK (
+        unit_type IN (
+            'raw_text',
+            'contextual_text',
+            'summary',
+            'generated_question',
+            'entity_card',
+            'table_row',
+            'other'
+        )
+    ),
+    target_type          TEXT NOT NULL CHECK (
+        target_type IN ('raw_segment', 'section', 'document', 'entity', 'synthetic', 'other')
+    ),
+    target_id            TEXT,
+    raw_document_id      TEXT NOT NULL REFERENCES asset_raw_documents(id) ON DELETE CASCADE,
+    title                TEXT,
+    text                 TEXT NOT NULL,
+    search_text          TEXT NOT NULL,
+    block_type           TEXT NOT NULL DEFAULT 'unknown' CHECK (
+        block_type IN ('paragraph', 'heading', 'table', 'list', 'code', 'blockquote', 'html_table', 'raw_html', 'unknown')
+    ),
+    semantic_role        TEXT NOT NULL DEFAULT 'unknown' CHECK (
+        semantic_role IN (
+            'concept',
+            'parameter',
+            'example',
+            'note',
+            'procedure_step',
+            'troubleshooting_step',
+            'constraint',
+            'alarm',
+            'checklist',
+            'unknown'
+        )
+    ),
+    facets_json          TEXT NOT NULL DEFAULT '{}',
+    entity_refs_json     TEXT NOT NULL DEFAULT '[]',
+    source_refs_json     TEXT NOT NULL DEFAULT '{}',
+    llm_result_refs_json TEXT NOT NULL DEFAULT '{}',
+    weight               REAL NOT NULL DEFAULT 1.0,
+    created_at           TEXT NOT NULL,
+    metadata_json        TEXT NOT NULL DEFAULT '{}',
+    UNIQUE (raw_document_id, unit_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_asset_retrieval_units_document
+    ON asset_retrieval_units(raw_document_id);
+
+CREATE INDEX IF NOT EXISTS idx_asset_retrieval_units_target
+    ON asset_retrieval_units(target_type, target_id);
+
+CREATE INDEX IF NOT EXISTS idx_asset_retrieval_units_unit_type
+    ON asset_retrieval_units(unit_type);
+
+CREATE INDEX IF NOT EXISTS idx_asset_retrieval_units_block_role
+    ON asset_retrieval_units(block_type, semantic_role);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS asset_retrieval_units_fts
+USING fts5(
+    retrieval_unit_id UNINDEXED,
+    title,
+    text,
+    search_text,
+    tokenize = 'unicode61'
+);
+
+CREATE TRIGGER IF NOT EXISTS trg_asset_retrieval_units_ai
+AFTER INSERT ON asset_retrieval_units
+BEGIN
+    INSERT INTO asset_retrieval_units_fts (retrieval_unit_id, title, text, search_text)
+    VALUES (new.id, coalesce(new.title, ''), new.text, new.search_text);
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_asset_retrieval_units_au
+AFTER UPDATE ON asset_retrieval_units
+BEGIN
+    DELETE FROM asset_retrieval_units_fts WHERE retrieval_unit_id = old.id;
+    INSERT INTO asset_retrieval_units_fts (retrieval_unit_id, title, text, search_text)
+    VALUES (new.id, coalesce(new.title, ''), new.text, new.search_text);
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_asset_retrieval_units_ad
+AFTER DELETE ON asset_retrieval_units
+BEGIN
+    DELETE FROM asset_retrieval_units_fts WHERE retrieval_unit_id = old.id;
+END;
+
+CREATE TABLE IF NOT EXISTS asset_retrieval_embeddings (
+    id                 TEXT PRIMARY KEY,
+    retrieval_unit_id  TEXT NOT NULL REFERENCES asset_retrieval_units(id) ON DELETE CASCADE,
+    embedding_model    TEXT NOT NULL,
+    embedding_provider TEXT NOT NULL,
+    text_kind          TEXT NOT NULL,
+    embedding_dim      INTEGER NOT NULL CHECK (embedding_dim > 0),
+    embedding_vector   TEXT NOT NULL,
+    content_hash       TEXT NOT NULL,
+    created_at         TEXT NOT NULL,
+    metadata_json      TEXT NOT NULL DEFAULT '{}'
+);
+
+CREATE INDEX IF NOT EXISTS idx_asset_retrieval_embeddings_unit
+    ON asset_retrieval_embeddings(retrieval_unit_id);
+
+CREATE INDEX IF NOT EXISTS idx_asset_retrieval_embeddings_model
+    ON asset_retrieval_embeddings(embedding_provider, embedding_model);
+
+-- Legacy compatibility tables. They are retained for migration/inspection only
+-- and are not part of the v1.1 primary retrieval path.
 CREATE TABLE IF NOT EXISTS asset_canonical_segments (
     id                 TEXT PRIMARY KEY,
-    publish_version_id TEXT NOT NULL REFERENCES asset_publish_versions(id) ON DELETE CASCADE,
-    canonical_key      TEXT NOT NULL,
-    block_type         TEXT NOT NULL DEFAULT 'unknown' CHECK (block_type IN ('paragraph', 'table', 'list', 'code', 'blockquote', 'html_table', 'raw_html', 'unknown')),
-    semantic_role      TEXT NOT NULL DEFAULT 'unknown' CHECK (semantic_role IN ('concept', 'parameter', 'example', 'note', 'procedure_step', 'troubleshooting_step', 'constraint', 'alarm', 'checklist', 'unknown')),
+    canonical_key      TEXT NOT NULL UNIQUE,
+    block_type         TEXT NOT NULL DEFAULT 'unknown',
+    semantic_role      TEXT NOT NULL DEFAULT 'unknown',
     title              TEXT,
     canonical_text     TEXT NOT NULL,
     summary            TEXT,
@@ -185,28 +342,16 @@ CREATE TABLE IF NOT EXISTS asset_canonical_segments (
     entity_refs_json   TEXT NOT NULL DEFAULT '[]',
     scope_json         TEXT NOT NULL DEFAULT '{}',
     has_variants       INTEGER NOT NULL DEFAULT 0 CHECK (has_variants IN (0, 1)),
-    variant_policy     TEXT NOT NULL DEFAULT 'none' CHECK (variant_policy IN ('none', 'prefer_latest', 'require_scope', 'require_disambiguation', 'manual_review')),
-    quality_score      REAL CHECK (quality_score IS NULL OR (quality_score >= 0 AND quality_score <= 1)),
+    variant_policy     TEXT NOT NULL DEFAULT 'none',
+    quality_score      REAL,
     created_at         TEXT NOT NULL,
-    metadata_json      TEXT NOT NULL DEFAULT '{}',
-    UNIQUE (publish_version_id, canonical_key),
-    UNIQUE (id, publish_version_id)
+    metadata_json      TEXT NOT NULL DEFAULT '{}'
 );
-
-CREATE INDEX IF NOT EXISTS idx_asset_canonical_segments_block_role
-    ON asset_canonical_segments(publish_version_id, block_type, semantic_role);
-
-CREATE INDEX IF NOT EXISTS idx_asset_canonical_segments_variants
-    ON asset_canonical_segments(publish_version_id, has_variants, variant_policy);
-
-CREATE INDEX IF NOT EXISTS idx_asset_canonical_segments_search_text
-    ON asset_canonical_segments(publish_version_id, search_text);
 
 CREATE TABLE IF NOT EXISTS asset_canonical_segment_sources (
     id                   TEXT PRIMARY KEY,
-    publish_version_id   TEXT NOT NULL REFERENCES asset_publish_versions(id) ON DELETE CASCADE,
-    canonical_segment_id TEXT NOT NULL,
-    raw_segment_id       TEXT NOT NULL,
+    canonical_segment_id TEXT NOT NULL REFERENCES asset_canonical_segments(id) ON DELETE CASCADE,
+    raw_segment_id       TEXT NOT NULL REFERENCES asset_raw_segments(id) ON DELETE CASCADE,
     relation_type        TEXT NOT NULL CHECK (
         relation_type IN (
             'primary',
@@ -219,26 +364,14 @@ CREATE TABLE IF NOT EXISTS asset_canonical_segment_sources (
     ),
     is_primary           INTEGER NOT NULL DEFAULT 0 CHECK (is_primary IN (0, 1)),
     priority             INTEGER NOT NULL DEFAULT 100 CHECK (priority >= 0),
-    similarity_score     REAL CHECK (similarity_score IS NULL OR (similarity_score >= 0 AND similarity_score <= 1)),
+    similarity_score     REAL,
     diff_summary         TEXT,
     metadata_json        TEXT NOT NULL DEFAULT '{}',
-    FOREIGN KEY (canonical_segment_id, publish_version_id)
-        REFERENCES asset_canonical_segments(id, publish_version_id)
-        ON DELETE CASCADE,
-    FOREIGN KEY (raw_segment_id, publish_version_id)
-        REFERENCES asset_raw_segments(id, publish_version_id)
-        ON DELETE CASCADE,
     UNIQUE (canonical_segment_id, raw_segment_id)
 );
 
-CREATE INDEX IF NOT EXISTS idx_asset_sources_canonical
-    ON asset_canonical_segment_sources(publish_version_id, canonical_segment_id);
+CREATE INDEX IF NOT EXISTS idx_asset_canonical_segment_sources_canonical
+    ON asset_canonical_segment_sources(canonical_segment_id);
 
-CREATE INDEX IF NOT EXISTS idx_asset_sources_raw
-    ON asset_canonical_segment_sources(publish_version_id, raw_segment_id);
-
-CREATE INDEX IF NOT EXISTS idx_asset_sources_primary_priority
-    ON asset_canonical_segment_sources(canonical_segment_id, is_primary, priority);
-
-CREATE INDEX IF NOT EXISTS idx_asset_sources_relation_type
-    ON asset_canonical_segment_sources(publish_version_id, relation_type);
+CREATE INDEX IF NOT EXISTS idx_asset_canonical_segment_sources_raw
+    ON asset_canonical_segment_sources(raw_segment_id);
