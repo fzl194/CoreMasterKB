@@ -238,6 +238,8 @@ class LLMService:
     async def _build_execute_response(self, task_id: str) -> dict:
         cur = await self._db.execute("SELECT status, attempt_count FROM agent_llm_tasks WHERE id = ?", (task_id,))
         task = await cur.fetchone()
+        if not task:
+            return {"task_id": task_id, "status": "unknown", "attempts": 0, "result": None, "error": None}
 
         cur = await self._db.execute("SELECT parse_status, parsed_output_json, text_output, validation_errors_json FROM agent_llm_results WHERE task_id = ?", (task_id,))
         result_row = await cur.fetchone()

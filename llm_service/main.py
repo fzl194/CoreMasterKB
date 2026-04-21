@@ -13,7 +13,7 @@ from llm_service.db import init_db
 from llm_service.providers.base import ProviderProtocol
 from llm_service.providers.openai_compatible import OpenAICompatibleProvider
 from llm_service.runtime.service import LLMService
-from llm_service.runtime.worker import Worker
+from llm_service.runtime.worker import LeaseRecovery, Worker
 
 _TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
 logger = logging.getLogger(__name__)
@@ -26,6 +26,11 @@ def create_app(
     start_worker: bool = True,
 ) -> FastAPI:
     cfg = config or LLMServiceConfig()
+    if not cfg.provider_api_key and not provider_factory:
+        raise ValueError(
+            "LLM_SERVICE_PROVIDER_API_KEY is required. "
+            "Set it in .env or as an environment variable."
+        )
     _factory = provider_factory
 
     @asynccontextmanager
@@ -47,6 +52,7 @@ def create_app(
         )
 
         worker = None
+        recovery = None
         if start_worker:
             worker = Worker(
                 db=db,
@@ -57,9 +63,18 @@ def create_app(
                 concurrency=cfg.worker_concurrency,
             )
             await worker.start()
+            recovery = LeaseRecovery(
+                db=db,
+                task_manager=svc._mgr,
+                event_bus=svc._bus,
+                interval=30.0,
+            )
+            await recovery.start()
 
         yield
 
+        if recovery:
+            await recovery.stop()
         if worker:
             await worker.stop()
         await db.close()
@@ -70,11 +85,13 @@ def create_app(
     from llm_service.api.health import router as health_router
     from llm_service.api.results import router as results_router
     from llm_service.api.tasks import router as tasks_router
+    from llm_service.api.templates import router as templates_router
     from llm_service.dashboard.views import router as dashboard_router
 
     app.include_router(health_router)
     app.include_router(tasks_router)
     app.include_router(results_router)
+    app.include_router(templates_router)
     app.include_router(dashboard_router)
 
     return app
