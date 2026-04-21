@@ -9,6 +9,8 @@ dependencies = [
     "pydantic-settings>=2.3",
     "aiosqlite>=0.20",
     "markdown-it-py>=3.0",
+    "jinja2>=3.1",
+    "jsonschema>=4.21",
 ]
 
 [project.optional-dependencies]
@@ -19,4 +21,4 @@ requires = ["setuptools>=68.0"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-include = ["agent_serving*", "knowledge_mining*"]
+include = ["agent_serving*", "knowledge_mining*", "llm_service*"]
