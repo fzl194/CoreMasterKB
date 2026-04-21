@@ -1,52 +1,129 @@
-"""Enrich stage: rule-based semantic enrichment for v1.1.
+"""Enrich stage: formal pluggable understanding phase for v1.1.
 
-v1.1 enrich does:
-- Refine semantic_role based on structural context
-- Enhance entity_refs with section-level context
-- Compute metadata_json fields for downstream stages
+v1.1 enrich is the single point where:
+- Entity extraction (commands, network elements, parameters)
+- Semantic role classification
+- Heading role annotation
+- Table metadata enrichment
 
-v1.2 will replace this with LLM-based extraction.
+are applied to segments. This stage accepts pluggable Protocol interfaces:
+- EntityExtractor: extract structured entities from text
+- RoleClassifier: classify segment semantic role
+
+v1.1 provides RuleBasedEntityExtractor + DefaultRoleClassifier.
+v1.2 can inject LLM-backed implementations without changing segmentation or retrieval_units.
 """
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
+from knowledge_mining.mining.extractors import (
+    DefaultRoleClassifier,
+    EntityExtractor,
+    NoOpEntityExtractor,
+    RoleClassifier,
+    RuleBasedEntityExtractor,
+)
 from knowledge_mining.mining.models import RawSegmentData
+
+_SCHEMA_SEMANTIC_ROLES = frozenset({
+    "concept", "parameter", "example", "note", "procedure_step",
+    "troubleshooting_step", "constraint", "alarm", "checklist", "unknown",
+})
+
+
+@runtime_checkable
+class Enricher(Protocol):
+    """Protocol for the enrich stage. v1.2 LLM implementation replaces this."""
+    def enrich(self, segments: list[RawSegmentData], **kwargs: Any) -> list[RawSegmentData]: ...
+
+
+class RuleBasedEnricher:
+    """v1.1 default: rule-based entity extraction + role classification.
+
+    This is the formal understanding stage. It replaces the old approach where
+    extraction was done during segmentation.
+    """
+
+    def __init__(
+        self,
+        entity_extractor: EntityExtractor | None = None,
+        role_classifier: RoleClassifier | None = None,
+    ) -> None:
+        self._extractor = entity_extractor or RuleBasedEntityExtractor()
+        self._classifier = role_classifier or DefaultRoleClassifier()
+
+    def enrich(
+        self,
+        segments: list[RawSegmentData],
+        **kwargs: Any,
+    ) -> list[RawSegmentData]:
+        """Apply entity extraction, role classification, and metadata enrichment."""
+        enriched: list[RawSegmentData] = []
+        result: list[RawSegmentData] = []
+        for seg in segments:
+            result.append(_enrich_one(seg, self._extractor, self._classifier))
+        return result
 
 
 def enrich_segments(
     segments: list[RawSegmentData],
     *,
+    entity_extractor: EntityExtractor | None = None,
+    role_classifier: RoleClassifier | None = None,
     context: dict[str, Any] | None = None,
 ) -> list[RawSegmentData]:
-    """Apply rule-based enrichment to segments. Returns new list (immutable)."""
-    ctx = context or {}
-    enriched: list[RawSegmentData] = []
-    for seg in segments:
-        enriched.append(_enrich_one(seg, ctx))
-    return enriched
+    """Apply enrichment to segments using the rule-based enricher.
+
+    This is the primary entry point for the enrich pipeline stage.
+    Returns new list (immutable).
+    """
+    enricher = RuleBasedEnricher(
+        entity_extractor=entity_extractor,
+        role_classifier=role_classifier,
+    )
+    return enricher.enrich(segments)
 
 
-def _enrich_one(seg: RawSegmentData, ctx: dict[str, Any]) -> RawSegmentData:
-    """Enrich a single segment. Returns a new frozen instance."""
+def _enrich_one(
+    seg: RawSegmentData,
+    extractor: EntityExtractor,
+    classifier: RoleClassifier,
+) -> RawSegmentData:
+    """Enrich a single segment: entity extraction + role classification + metadata."""
     changes: dict[str, Any] = {}
+    ctx: dict[str, Any] = {"section_path": seg.section_path}
 
-    # 1. Enhance entity_refs with section context
-    entity_refs = list(seg.entity_refs_json)
+    # 1. Entity extraction (formal understanding, not in segmentation)
+    structure_json = seg.structure_json
+    entity_refs = extractor.extract(seg.raw_text, {**ctx, "structure": structure_json})
+
+    # 1a. Add section-title-derived entities
     if seg.section_title:
         entity_refs = _add_section_context_entities(seg.section_title, entity_refs)
+
     if entity_refs != list(seg.entity_refs_json):
         changes["entity_refs_json"] = entity_refs
 
-    # 2. Enrich metadata with structural hints
+    # 2. Role classification (formal understanding, not in segmentation)
+    if seg.semantic_role == "unknown":
+        classified_role = classifier.classify(
+            seg.raw_text, seg.section_title, seg.block_type, ctx,
+        )
+        role = _validate_semantic_role(classified_role)
+        if role != seg.semantic_role:
+            changes["semantic_role"] = role
+
+    # 3. Metadata enrichment
     meta = dict(seg.metadata_json)
     if seg.block_type == "heading" and seg.section_title:
         meta["heading_role"] = _classify_heading_role(seg.section_title)
-    if seg.block_type == "table" and seg.structure_json:
-        cols = seg.structure_json.get("columns", [])
+    if seg.block_type == "table" and structure_json:
+        cols = structure_json.get("columns", [])
         if cols:
             meta["table_column_count"] = len(cols)
             meta["table_has_parameter_column"] = any("参数" in c for c in cols)
+
     if changes or meta != dict(seg.metadata_json):
         changes["metadata_json"] = meta
 
@@ -71,6 +148,12 @@ def _enrich_one(seg: RawSegmentData, ctx: dict[str, Any]) -> RawSegmentData:
         entity_refs_json=changes.get("entity_refs_json", seg.entity_refs_json),
         metadata_json=changes.get("metadata_json", seg.metadata_json),
     )
+
+
+def _validate_semantic_role(role: str) -> str:
+    if role in _SCHEMA_SEMANTIC_ROLES:
+        return role
+    return "unknown"
 
 
 _HEADING_ROLE_KEYWORDS: list[tuple[list[str], str]] = [
@@ -98,7 +181,6 @@ def _add_section_context_entities(
     """Add section-title-derived entities if not already present."""
     seen = {(r["type"], r["name"]) for r in existing}
 
-    # Check if title itself is a command-like pattern
     import re
     cmd_match = re.match(r"^(ADD|SHOW|MOD|DEL|DSP|LST|REG|DEREG)\s+(\S+)", section_title.upper())
     if cmd_match:

@@ -1,7 +1,8 @@
 """Publishing stage: build + release for v1.1.
 
 Two-phase:
-- assemble_build: select snapshots, merge with previous active build
+- classify_documents: compare snapshots against previous active build → NEW/UPDATE/SKIP/REMOVE
+- assemble_build: select snapshots, merge with previous active build (incremental or full)
 - publish_release: activate a build as the current active release
 """
 from __future__ import annotations
@@ -12,30 +13,95 @@ from typing import Any
 from knowledge_mining.mining.db import AssetCoreDB
 
 
+def classify_documents(
+    asset_db: AssetCoreDB,
+    snapshot_decisions: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Classify each document action by comparing with previous active build.
+
+    Input: snapshot_decisions with document_id, document_snapshot_id (current run).
+    Output: enriched snapshot_decisions with action, selection_status, reason.
+
+    Actions:
+    - NEW: document not in previous build
+    - UPDATE: document exists but snapshot changed
+    - SKIP: document exists and snapshot unchanged
+    - REMOVE: document explicitly marked for removal
+    """
+    prev_build = asset_db.get_active_build()
+    prev_snapshots: dict[str, str] = {}  # document_id -> snapshot_id
+
+    if prev_build:
+        for ps in asset_db.get_build_snapshots(prev_build["id"]):
+            prev_snapshots[ps["document_id"]] = ps["document_snapshot_id"]
+
+    for decision in snapshot_decisions:
+        doc_id = decision["document_id"]
+        snap_id = decision["document_snapshot_id"]
+
+        if decision.get("selection_status") == "removed":
+            decision["action"] = "REMOVE"
+            decision["reason"] = "removed"
+        elif doc_id not in prev_snapshots:
+            decision["action"] = "NEW"
+            decision["reason"] = "add"
+            decision["selection_status"] = "active"
+        elif prev_snapshots[doc_id] == snap_id:
+            decision["action"] = "SKIP"
+            decision["reason"] = "retain"
+            decision["selection_status"] = "active"
+        else:
+            decision["action"] = "UPDATE"
+            decision["reason"] = "update"
+            decision["selection_status"] = "active"
+
+    return snapshot_decisions
+
+
+def determine_build_mode(
+    snapshot_decisions: list[dict[str, Any]],
+    has_prev_build: bool,
+) -> str:
+    """Determine build mode based on document actions.
+
+    Returns "full" if no previous build exists, otherwise "incremental".
+    """
+    if not has_prev_build:
+        return "full"
+    return "incremental"
+
+
 def assemble_build(
     asset_db: AssetCoreDB,
     *,
     run_id: str,
     batch_id: str | None = None,
-    build_mode: str = "full",
     snapshot_decisions: list[dict[str, Any]],
 ) -> str:
-    """Assemble a new build from snapshot decisions.
+    """Assemble a new build from snapshot decisions with merge semantics.
 
     snapshot_decisions: list of dicts with keys:
-        document_id, document_snapshot_id, reason (add/update/retain/remove),
-        selection_status (active/removed)
+        document_id, document_snapshot_id, action (NEW/UPDATE/SKIP/REMOVE),
+        selection_status (active/removed), reason (add/update/retain/remove)
+
+    Build mode is determined automatically:
+    - "full" when no previous active build exists
+    - "incremental" when merging with previous active build
 
     Returns build_id.
     """
-    # Get previous active build for incremental merge
-    parent_build_id = None
     prev_build = asset_db.get_active_build()
-    if prev_build and build_mode == "incremental":
-        parent_build_id = prev_build["id"]
+    has_prev = prev_build is not None
+    build_mode = determine_build_mode(snapshot_decisions, has_prev)
+    parent_build_id = prev_build["id"] if has_prev else None
 
     build_id = uuid.uuid4().hex
     build_code = f"B-{uuid.uuid4().hex[:8].upper()}"
+
+    action_counts = {}
+    for d in snapshot_decisions:
+        action = d.get("action", "NEW")
+        action_counts[action] = action_counts.get(action, 0) + 1
 
     asset_db.insert_build(
         build_id=build_id,
@@ -48,11 +114,12 @@ def assemble_build(
         summary_json={
             "snapshot_count": len([d for d in snapshot_decisions if d.get("selection_status") == "active"]),
             "removed_count": len([d for d in snapshot_decisions if d.get("selection_status") == "removed"]),
+            "action_counts": action_counts,
         },
     )
 
-    # If incremental merge, carry forward parent build snapshots
-    if parent_build_id and prev_build:
+    # Incremental merge: carry forward parent snapshots not in current decisions
+    if parent_build_id and has_prev:
         parent_snapshots = asset_db.get_build_snapshots(parent_build_id)
         decided_doc_ids = {d["document_id"] for d in snapshot_decisions}
         for ps in parent_snapshots:
@@ -65,7 +132,7 @@ def assemble_build(
                     reason="retain",
                 )
 
-    # Add new decisions
+    # Add current run decisions (NEW/UPDATE/SKIP/REMOVE)
     for decision in snapshot_decisions:
         asset_db.upsert_build_document_snapshot(
             build_id=build_id,

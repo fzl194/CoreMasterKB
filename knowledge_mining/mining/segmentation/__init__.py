@@ -4,17 +4,12 @@ v1.1 key points:
 - Headings become independent segments (block_type='heading') for section_header_of relations
 - structure_json preserves table columns/rows from ContentBlock.structure
 - source_offsets_json includes parser, block_index, line_start, line_end
+- Entity extraction and role classification are NOT done here — deferred to enrich stage
 """
 from __future__ import annotations
 
 from typing import Any
 
-from knowledge_mining.mining.extractors import (
-    DefaultRoleClassifier,
-    EntityExtractor,
-    NoOpEntityExtractor,
-    RoleClassifier,
-)
 from knowledge_mining.mining.models import ContentBlock, DocumentProfile, RawSegmentData, SectionNode
 from knowledge_mining.mining.hash_utils import content_hash, normalized_hash
 from knowledge_mining.mining.text_utils import token_count
@@ -24,30 +19,23 @@ _SCHEMA_BLOCK_TYPES = {
     "html_table", "raw_html", "unknown",
 }
 
-_SCHEMA_SEMANTIC_ROLES = {
-    "concept", "parameter", "example", "note", "procedure_step",
-    "troubleshooting_step", "constraint", "alarm", "checklist", "unknown",
-}
-
 
 def segment_document(
     doc_root: SectionNode,
     profile: DocumentProfile,
     *,
-    role_classifier: RoleClassifier | None = None,
-    entity_extractor: EntityExtractor | None = None,
     parser_name: str = "unknown",
 ) -> list[RawSegmentData]:
     """Split document section tree into raw segments.
 
     v1.1: Headings are emitted as independent segments (block_type='heading')
     so that section_header_of relations can be built in the relations stage.
-    """
-    classifier = role_classifier or DefaultRoleClassifier()
-    extractor = entity_extractor or NoOpEntityExtractor()
 
+    Entity extraction and role classification are deferred to the enrich stage.
+    Segments are produced with default semantic_role="unknown" and empty entity_refs_json.
+    """
     segments: list[RawSegmentData] = []
-    _walk_sections(doc_root, profile.document_key, [], segments, classifier, extractor, parser_name)
+    _walk_sections(doc_root, profile.document_key, [], segments, parser_name)
     return [
         RawSegmentData(
             document_key=s.document_key,
@@ -75,8 +63,6 @@ def _walk_sections(
     document_key: str,
     parent_path: list[dict[str, Any]],
     segments: list[RawSegmentData],
-    classifier: RoleClassifier,
-    extractor: EntityExtractor,
     parser_name: str,
 ) -> None:
     """Recursively walk section tree, creating segments."""
@@ -84,7 +70,6 @@ def _walk_sections(
     if node.title and node.level > 0:
         current_path.append({"title": node.title, "level": node.level})
 
-    context: dict[str, Any] = {"section_path": current_path}
     current_group: list[ContentBlock] = []
     block_index = 0
 
@@ -105,7 +90,7 @@ def _walk_sections(
                 segments.append(
                     _make_segment(
                         document_key, current_path, node, current_group,
-                        block_index, classifier, extractor, context, parser_name,
+                        block_index, parser_name,
                     )
                 )
                 block_index += 1
@@ -119,7 +104,7 @@ def _walk_sections(
                 segments.append(
                     _make_segment(
                         document_key, current_path, node, current_group,
-                        block_index, classifier, extractor, context, parser_name,
+                        block_index, parser_name,
                     )
                 )
                 block_index += 1
@@ -127,7 +112,7 @@ def _walk_sections(
             segments.append(
                 _make_segment(
                     document_key, current_path, node, [block],
-                    block_index, classifier, extractor, context, parser_name,
+                    block_index, parser_name,
                 )
             )
             block_index += 1
@@ -138,12 +123,12 @@ def _walk_sections(
         segments.append(
             _make_segment(
                 document_key, current_path, node, current_group,
-                block_index, classifier, extractor, context, parser_name,
+                block_index, parser_name,
             )
         )
 
     for child in node.children:
-        _walk_sections(child, document_key, current_path, segments, classifier, extractor, parser_name)
+        _walk_sections(child, document_key, current_path, segments, parser_name)
 
 
 def _make_heading_segment(
@@ -186,12 +171,13 @@ def _make_segment(
     section: SectionNode,
     blocks: list[ContentBlock],
     block_index: int,
-    classifier: RoleClassifier,
-    extractor: EntityExtractor,
-    context: dict[str, Any],
     parser_name: str,
 ) -> RawSegmentData:
-    """Create a RawSegmentData from a group of content blocks."""
+    """Create a RawSegmentData from a group of content blocks.
+
+    semantic_role defaults to "unknown" — enrich stage will assign the real role.
+    entity_refs_json defaults to [] — enrich stage will populate.
+    """
     primary_block = next((b for b in blocks if b.block_type != "heading"), None)
     if primary_block is None:
         primary_block = blocks[0] if blocks else None
@@ -200,12 +186,7 @@ def _make_segment(
     raw_text = "\n\n".join(b.text for b in blocks)
     norm_text = raw_text.lower().strip()
 
-    semantic_role = _schema_semantic_role(classifier.classify(
-        raw_text, section.title, block_type, context,
-    ))
-
     structure_json = _extract_structure_info(blocks)
-    entity_refs = extractor.extract(raw_text, {**context, "structure": structure_json})
 
     line_start = None
     line_end = None
@@ -227,7 +208,7 @@ def _make_segment(
         document_key=document_key,
         segment_index=0,
         block_type=block_type,
-        semantic_role=semantic_role,
+        semantic_role="unknown",
         section_path=section_path,
         section_title=section.title,
         raw_text=raw_text,
@@ -237,7 +218,7 @@ def _make_segment(
         token_count=token_count(raw_text),
         structure_json=structure_json,
         source_offsets_json=source_offsets,
-        entity_refs_json=entity_refs,
+        entity_refs_json=[],
         metadata_json={},
     )
 
@@ -279,10 +260,4 @@ def _extract_structure_info(blocks: list[ContentBlock]) -> dict:
 def _schema_block_type(block_type: str) -> str:
     if block_type in _SCHEMA_BLOCK_TYPES:
         return block_type
-    return "unknown"
-
-
-def _schema_semantic_role(semantic_role: str) -> str:
-    if semantic_role in _SCHEMA_SEMANTIC_ROLES:
-        return semantic_role
     return "unknown"

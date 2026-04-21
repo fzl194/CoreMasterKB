@@ -68,6 +68,8 @@ class _DB:
     def open(self) -> None:
         if self._conn is not None:
             return
+        # Ensure parent directory exists
+        Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(str(self.db_path))
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA foreign_keys=ON")

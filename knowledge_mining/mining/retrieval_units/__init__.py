@@ -4,28 +4,50 @@ v1.1 produces:
 - raw_text: one-to-one from each segment
 - contextual_text: segment with section heading context prepended
 - entity_card: one per unique entity from entity_refs (deduped across segments)
+- generated_question: placeholder for LLM-generated questions (v1.1: empty when no LLM Runtime)
 
 v1.2 will add:
+- LLM-backed generated_question via LlmQuestionGenerator protocol
 - summary (LLM-generated)
-- generated_question (LLM-generated)
 """
 from __future__ import annotations
 
 import uuid
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
 from knowledge_mining.mining.models import RawSegmentData, RetrievalUnitData
+
+
+@runtime_checkable
+class QuestionGenerator(Protocol):
+    """Protocol for generating retrieval questions from segments.
+
+    v1.1: NoOpQuestionGenerator returns empty (LLM Runtime not yet integrated).
+    v1.2: LlmQuestionGenerator calls LLM Runtime to generate questions.
+    """
+    def generate(self, segment: RawSegmentData) -> list[str]:
+        """Return list of generated questions for the segment."""
+        ...
+
+
+class NoOpQuestionGenerator:
+    """v1.1 default: no questions generated (LLM Runtime not yet integrated)."""
+
+    def generate(self, segment: RawSegmentData) -> list[str]:
+        return []
 
 
 def build_retrieval_units(
     segments: list[RawSegmentData],
     *,
     document_key: str = "",
+    question_generator: QuestionGenerator | None = None,
 ) -> list[RetrievalUnitData]:
     """Build retrieval units from segments."""
     if not segments:
         return []
 
+    qgen = question_generator or NoOpQuestionGenerator()
     units: list[RetrievalUnitData] = []
     seen_entity_cards: set[str] = set()
 
@@ -44,6 +66,11 @@ def build_retrieval_units(
             if entity_key not in seen_entity_cards:
                 seen_entity_cards.add(entity_key)
                 units.append(_make_entity_card_unit(seg, ref))
+
+        # 4. generated_question units (v1.1: empty unless LLM Runtime provided)
+        questions = qgen.generate(seg)
+        for qi, question in enumerate(questions):
+            units.append(_make_generated_question_unit(seg, question, qi))
 
     return units
 
@@ -74,7 +101,6 @@ def _make_raw_text_unit(seg: RawSegmentData) -> RetrievalUnitData:
 
 def _make_contextual_text_unit(seg: RawSegmentData) -> RetrievalUnitData | None:
     """Contextual text: raw_text with section path prepended."""
-    # Only create if we have meaningful section context
     if not seg.section_path or seg.block_type == "heading":
         return None
 
@@ -138,6 +164,36 @@ def _make_entity_card_unit(
         source_refs_json=_build_source_refs(seg),
         weight=0.5,
         metadata_json={"first_seen_in": seg.document_key},
+    )
+
+
+def _make_generated_question_unit(
+    seg: RawSegmentData,
+    question: str,
+    question_index: int,
+) -> RetrievalUnitData:
+    """Generated question unit: one per LLM-generated question."""
+    return RetrievalUnitData(
+        segment_key=f"{seg.document_key}#{seg.segment_index}",
+        unit_key=f"ru:{seg.document_key}#{seg.segment_index}:gen_q_{question_index}",
+        unit_type="generated_question",
+        target_type="raw_segment",
+        target_ref_json={
+            "document_key": seg.document_key,
+            "segment_index": seg.segment_index,
+            "question_index": question_index,
+        },
+        title=question[:80],
+        text=question,
+        search_text=question,
+        block_type=seg.block_type,
+        semantic_role=seg.semantic_role,
+        facets_json=_build_facets(seg),
+        entity_refs_json=list(seg.entity_refs_json),
+        source_refs_json=_build_source_refs(seg),
+        llm_result_refs_json={"source": "llm_runtime", "question_index": question_index},
+        weight=0.7,
+        metadata_json={"question_index": question_index},
     )
 
 

@@ -35,8 +35,8 @@ from knowledge_mining.mining.enrich import enrich_segments
 from knowledge_mining.mining.relations import build_relations
 from knowledge_mining.mining.retrieval_units import build_retrieval_units
 from knowledge_mining.mining.snapshot import select_or_create_snapshot
-from knowledge_mining.mining.publishing import assemble_build, publish_release
-from knowledge_mining.mining.extractors import RuleBasedEntityExtractor, DefaultRoleClassifier
+from knowledge_mining.mining.publishing import assemble_build, classify_documents, publish_release
+from knowledge_mining.mining.extractors import RuleBasedEntityExtractor, DefaultRoleClassifier  # noqa: F401 — used for enrich
 
 
 def run(
@@ -46,6 +46,7 @@ def run(
     mining_runtime_db_path: str | Path = "mining_runtime.sqlite",
     batch_params: BatchParams | None = None,
     phase1_only: bool = False,
+    publish_on_partial_failure: bool = False,
 ) -> dict[str, Any]:
     """Execute the mining pipeline.
 
@@ -55,6 +56,8 @@ def run(
         mining_runtime_db_path: Path to mining_runtime.sqlite
         batch_params: Batch-level configuration
         phase1_only: If True, stop after document-level processing (no build/publish)
+        publish_on_partial_failure: If True, publish even when some docs failed.
+            Default False: partial failures block active release, run marked "completed_with_errors".
 
     Returns:
         Summary dict with run_id, counts, and status.
@@ -69,13 +72,19 @@ def run(
     asset_db.open()
     runtime_db.open()
 
+    # Pre-generate run_id so we can fail_run on global exception
+    run_id = uuid.uuid4().hex
+
     try:
         return _run_pipeline(
-            asset_db, runtime_db, input_path, params, phase1_only,
+            asset_db, runtime_db, input_path, params, phase1_only, run_id,
+            publish_on_partial_failure,
         )
     except Exception as e:
-        # Attempt to mark run as failed if possible
+        # Mark run as failed
         try:
+            tracker = RuntimeTracker(runtime_db)
+            tracker.fail_run(run_id, error_summary=str(e)[:500])
             runtime_db.commit()
         except Exception:
             pass
@@ -135,12 +144,12 @@ def _run_pipeline(
     input_path: Path,
     params: BatchParams,
     phase1_only: bool,
+    run_id: str,
+    publish_on_partial_failure: bool = False,
 ) -> dict[str, Any]:
     """Core pipeline logic. Assumes DBs are already open."""
     tracker = RuntimeTracker(runtime_db)
 
-    # Create run
-    run_id = uuid.uuid4().hex
     now = _utcnow()
 
     # Phase 1: Ingest
@@ -169,6 +178,7 @@ def _run_pipeline(
     # Process each document
     entity_extractor = RuleBasedEntityExtractor()
     role_classifier = DefaultRoleClassifier()
+    # Note: extractors/classifiers are passed to enrich, NOT segmentation
 
     committed_count = 0
     failed_count = 0
@@ -179,13 +189,22 @@ def _run_pipeline(
         rd_id = uuid.uuid4().hex
         doc_key = f"doc:/{doc.relative_path}"
 
+        # Determine action by comparing with existing document
+        existing_doc = asset_db.get_document_by_key(doc_key)
+        if existing_doc is None:
+            action = "NEW"
+        elif existing_doc["normalized_content_hash"] != doc.normalized_content_hash:
+            action = "UPDATE"
+        else:
+            action = "SKIP"
+
         tracker.register_document(MiningRunDocumentData(
             id=rd_id,
             run_id=run_id,
             document_key=doc_key,
             raw_content_hash=doc.raw_content_hash,
             normalized_content_hash=doc.normalized_content_hash,
-            action="NEW",
+            action=action,
         ))
         runtime_db.commit()
 
@@ -212,20 +231,22 @@ def _run_pipeline(
                 runtime_db.commit()
                 continue
 
-            # Stage 2: Segment
+            # Stage 2: Segment (structure only, no understanding)
             evt = tracker.start_stage(run_id, "segment", rd_id)
             segments = segment_document(
                 tree, profile,
-                role_classifier=role_classifier,
-                entity_extractor=entity_extractor,
                 parser_name=doc.file_type,
             )
             tracker.end_stage(evt, run_id, "segment", output_summary=f"{len(segments)} segments")
             runtime_db.commit()
 
-            # Stage 3: Enrich
+            # Stage 3: Enrich (formal understanding: entity extraction + role classification)
             evt = tracker.start_stage(run_id, "enrich", rd_id)
-            segments = enrich_segments(segments)
+            segments = enrich_segments(
+                segments,
+                entity_extractor=entity_extractor,
+                role_classifier=role_classifier,
+            )
             tracker.end_stage(evt, run_id, "enrich", output_summary=f"{len(segments)} enriched")
             runtime_db.commit()
 
@@ -321,8 +342,7 @@ def _run_pipeline(
             snapshot_decisions.append({
                 "document_id": document_id,
                 "document_snapshot_id": snapshot_id,
-                "selection_status": "active",
-                "reason": "add",
+                "document_key": doc_key,
             })
 
             runtime_db.commit()
@@ -335,15 +355,19 @@ def _run_pipeline(
     # Phase 2: Build & Publish (unless phase1_only)
     build_id = None
     release_id = None
+    has_failures = failed_count > 0
 
+    # Build is always created if there are committed documents
     if not phase1_only and snapshot_decisions:
-        # Stage 7: Assemble build
+        # Classify documents: NEW/UPDATE/SKIP/REMOVE against previous active build
+        snapshot_decisions = classify_documents(asset_db, snapshot_decisions)
+
+        # Stage 7: Assemble build (auto-selects full vs incremental)
         evt = tracker.start_stage(run_id, "assemble_build")
         build_id = assemble_build(
             asset_db,
             run_id=run_id,
             batch_id=batch_id,
-            build_mode="full",
             snapshot_decisions=snapshot_decisions,
         )
         tracker.end_stage(evt, run_id, "assemble_build", output_summary=f"build_id={build_id}")
@@ -355,18 +379,26 @@ def _run_pipeline(
         tracker.end_stage(evt, run_id, "validate_build", output_summary="passed")
         runtime_db.commit()
 
-        # Stage 9: Publish release
-        evt = tracker.start_stage(run_id, "publish_release")
-        release_id = publish_release(
-            asset_db,
-            build_id=build_id,
-            released_by=f"run:{run_id}",
-        )
-        tracker.end_stage(evt, run_id, "publish_release", output_summary=f"release_id={release_id}")
-        asset_db.commit()
-        runtime_db.commit()
+        # Stage 9: Publish release — only if no failures or explicitly allowed
+        if not has_failures or publish_on_partial_failure:
+            evt = tracker.start_stage(run_id, "publish_release")
+            release_id = publish_release(
+                asset_db,
+                build_id=build_id,
+                released_by=f"run:{run_id}",
+            )
+            tracker.end_stage(evt, run_id, "publish_release", output_summary=f"release_id={release_id}")
+            asset_db.commit()
+            runtime_db.commit()
 
-    # Complete run
+    # Determine final run status
+    if has_failures and not publish_on_partial_failure:
+        run_status = "completed_with_errors"
+    elif has_failures and publish_on_partial_failure:
+        run_status = "completed_partial"
+    else:
+        run_status = "completed"
+
     tracker.complete_run(
         run_id,
         build_id=build_id,
@@ -375,11 +407,16 @@ def _run_pipeline(
         skipped_count=skipped_count,
         new_count=committed_count,
     )
+
+    # Override status if there are errors (complete_run always sets "completed")
+    if run_status != "completed":
+        runtime_db.update_run_status(run_id, run_status)
+
     runtime_db.commit()
 
     return {
         "run_id": run_id,
-        "status": "completed",
+        "status": run_status,
         "total_documents": len(docs),
         "committed_count": committed_count,
         "failed_count": failed_count,

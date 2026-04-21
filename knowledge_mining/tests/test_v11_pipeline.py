@@ -305,13 +305,22 @@ class TestEnrich:
         from knowledge_mining.mining.structure import parse_structure
         from knowledge_mining.mining.segmentation import segment_document
         from knowledge_mining.mining.enrich import enrich_segments
+        from knowledge_mining.mining.extractors import RuleBasedEntityExtractor, DefaultRoleClassifier
         tree = parse_structure(md_content)
         segments = segment_document(tree, DocumentProfile(document_key="doc:/test.md"))
-        enriched = enrich_segments(segments)
+        enriched = enrich_segments(
+            segments,
+            entity_extractor=RuleBasedEntityExtractor(),
+            role_classifier=DefaultRoleClassifier(),
+        )
         assert len(enriched) == len(segments)
         headings = [s for s in enriched if s.block_type == "heading"]
         for h in headings:
             assert "heading_role" in h.metadata_json
+        # Enrich should assign semantic roles (not "unknown" for non-headings)
+        non_headings = [s for s in enriched if s.block_type != "heading"]
+        roles = {s.semantic_role for s in non_headings}
+        assert len(roles - {"unknown"}) > 0  # at least some roles assigned
 
 
 class TestRelations:
@@ -345,11 +354,16 @@ class TestRetrievalUnits:
     def test_build_units(self, md_content):
         from knowledge_mining.mining.structure import parse_structure
         from knowledge_mining.mining.segmentation import segment_document
+        from knowledge_mining.mining.enrich import enrich_segments
         from knowledge_mining.mining.retrieval_units import build_retrieval_units
         from knowledge_mining.mining.extractors import RuleBasedEntityExtractor, DefaultRoleClassifier
         tree = parse_structure(md_content)
+        # v1.1 flow: segment (structure only) → enrich (understanding) → retrieval_units
         segments = segment_document(
             tree, DocumentProfile(document_key="doc:/test.md"),
+        )
+        segments = enrich_segments(
+            segments,
             entity_extractor=RuleBasedEntityExtractor(),
             role_classifier=DefaultRoleClassifier(),
         )
@@ -357,7 +371,7 @@ class TestRetrievalUnits:
         types = {u.unit_type for u in units}
         assert "raw_text" in types
         assert "contextual_text" in types
-        # entity_card requires entity_refs from extractors
+        # entity_card requires entity_refs from enrich stage
         assert "entity_card" in types
         # raw_text count should equal segment count
         assert sum(1 for u in units if u.unit_type == "raw_text") == len(segments)
