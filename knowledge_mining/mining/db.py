@@ -157,7 +157,9 @@ class AssetCoreDB(_DB):
                    metadata_json = excluded.metadata_json""",
             (document_id, document_key, document_name, document_type, _json_dumps(metadata_json), now),
         )
-        return document_id
+        # ON CONFLICT may keep the OLD id — read back the actual row id
+        row = self._fetchone("SELECT id FROM asset_documents WHERE document_key = ?", (document_key,))
+        return row["id"] if row else document_id
 
     def get_document_by_key(self, document_key: str) -> sqlite3.Row | None:
         return self._fetchone("SELECT * FROM asset_documents WHERE document_key = ?", (document_key,))
@@ -194,7 +196,12 @@ class AssetCoreDB(_DB):
                 _json_dumps(parser_profile_json), _json_dumps(metadata_json), now,
             ),
         )
-        return snapshot_id
+        # ON CONFLICT may keep the OLD id — read back the actual row id
+        row = self._fetchone(
+            "SELECT id FROM asset_document_snapshots WHERE normalized_content_hash = ?",
+            (normalized_content_hash,),
+        )
+        return row["id"] if row else snapshot_id
 
     def get_snapshot_by_hash(self, normalized_content_hash: str) -> sqlite3.Row | None:
         return self._fetchone(
@@ -560,6 +567,7 @@ class MiningRuntimeDB(_DB):
         status: str,
         finished_at: str | None = None,
         error_summary: str | None = None,
+        build_id: str | None = None,
         **counters: int,
     ) -> None:
         parts = ["status = ?"]
@@ -570,7 +578,10 @@ class MiningRuntimeDB(_DB):
         if error_summary is not None:
             parts.append("error_summary = ?")
             params.append(error_summary)
-        for col in ("total_documents", "new_count", "updated_count", "skipped_count", "failed_count", "committed_count", "build_id"):
+        if build_id is not None:
+            parts.append("build_id = ?")
+            params.append(build_id)
+        for col in ("total_documents", "new_count", "updated_count", "skipped_count", "failed_count", "committed_count"):
             if col in counters:
                 parts.append(f"{col} = ?")
                 params.append(counters[col])

@@ -84,7 +84,7 @@ def ingest_directory(
                 content = ""
                 summary["unparsed_documents"] += 1
 
-            normalized_hash = compute_snapshot_hash(content) if content else ""
+            normalized_hash = compute_snapshot_hash(content) if content else raw_hash
 
             doc = RawFileData(
                 file_path=str(file_path),

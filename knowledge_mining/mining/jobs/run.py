@@ -369,11 +369,11 @@ def _run_pipeline(
     # Complete run
     tracker.complete_run(
         run_id,
+        build_id=build_id,
         committed_count=committed_count,
         failed_count=failed_count,
         skipped_count=skipped_count,
         new_count=committed_count,
-        build_id=build_id,
     )
     runtime_db.commit()
 
