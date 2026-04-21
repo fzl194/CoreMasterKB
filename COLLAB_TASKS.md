@@ -62,15 +62,15 @@
 - 级别：正式
 - 状态：已发布，待 Claude Serving 产出 plan
 - 当前阶段：任务发布 / 等待计划
-- Claude：Claude Serving 待基于 v1.1 正式架构产出重写计划并开始实现
-- Codex：已发布任务上下文、读取链路、输出边界与演进要求；后续负责审查计划与实现
+- Claude：Claude Serving 已完成 v1.1 重写并提交 handoff；待基于 Codex review 继续修复 pipeline 抽象、build 视图一致性与 source drill-down fallback
+- Codex：已完成正式审查并提交 review，指出多路召回/重排 pipeline 缺失、LLM 接缝未成形、ActiveScope/graph 约束不足与 source_refs fallback 缺口
 - 管理员：已确认 Serving 需脱离旧 command/canonical 路径，按 Agent Knowledge Backend 重写
-- 计划文档：
-- 交接文档：
-- 审查文档：
+- 计划文档：`docs/plans/2026-04-21-v11-agent-serving-rewrite-plan.md`
+- 交接文档：`docs/handoffs/2026-04-21-v11-agent-serving-claude-serving-handoff.md`
+- 审查文档：`docs/analysis/2026-04-22-v11-agent-serving-codex-review.md`
 - 修复文档：
 - 管理员文档：
-- 最新消息序号：MSG-20260421-101600-codex
+- 最新消息序号：MSG-20260422-003721-codex
 - 备注：主背景见 `README.md`、`docs/architecture/2026-04-21-coremasterkb-v1.1-architecture.md`、`.dev/2026-04-21-v1.1-database-complete-proposal.md` 与 `databases/asset_core` 契约。
 
 ## TASK-20260421-v11-agent-llm-runtime

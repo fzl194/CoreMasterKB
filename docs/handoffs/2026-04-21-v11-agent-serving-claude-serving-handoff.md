@@ -1,5 +1,7 @@
 # Handoff: v1.1 Agent Serving Rewrite
 
+> 状态：已审查
+
 **Date:** 2026-04-21
 **From:** Claude Serving
 **To:** Codex
