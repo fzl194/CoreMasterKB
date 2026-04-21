@@ -6,7 +6,6 @@
 -- 3. Build selects document -> snapshot mappings.
 -- 4. Release publishes one build to one channel.
 -- 5. Retrieval path: release -> build -> selected snapshots -> retrieval_units -> source_refs -> raw_segments/relations.
--- 6. canonical tables are retained only as non-primary compatibility tables.
 
 PRAGMA foreign_keys = ON;
 
@@ -355,37 +354,3 @@ CREATE INDEX IF NOT EXISTS idx_asset_publish_releases_build
 
 CREATE INDEX IF NOT EXISTS idx_asset_publish_releases_channel_status
     ON asset_publish_releases(channel, status);
-
-CREATE TABLE IF NOT EXISTS asset_canonical_segments (
-    id                 TEXT PRIMARY KEY,
-    canonical_key      TEXT NOT NULL UNIQUE,
-    block_type         TEXT NOT NULL DEFAULT 'unknown',
-    semantic_role      TEXT NOT NULL DEFAULT 'unknown',
-    title              TEXT,
-    canonical_text     TEXT NOT NULL,
-    summary            TEXT,
-    search_text        TEXT NOT NULL,
-    entity_refs_json   TEXT NOT NULL DEFAULT '[]',
-    scope_json         TEXT NOT NULL DEFAULT '{}',
-    has_variants       INTEGER NOT NULL DEFAULT 0,
-    variant_policy     TEXT NOT NULL DEFAULT 'none',
-    quality_score      REAL,
-    created_at         TEXT NOT NULL,
-    metadata_json      TEXT NOT NULL DEFAULT '{}'
-);
-
-CREATE TABLE IF NOT EXISTS asset_canonical_segment_sources (
-    id                   TEXT PRIMARY KEY,
-    canonical_segment_id TEXT NOT NULL REFERENCES asset_canonical_segments(id) ON DELETE CASCADE,
-    raw_segment_id       TEXT NOT NULL REFERENCES asset_raw_segments(id) ON DELETE CASCADE,
-    relation_type        TEXT NOT NULL,
-    is_primary           INTEGER NOT NULL DEFAULT 0,
-    priority             INTEGER NOT NULL DEFAULT 100,
-    similarity_score     REAL,
-    diff_summary         TEXT,
-    metadata_json        TEXT NOT NULL DEFAULT '{}',
-    UNIQUE (canonical_segment_id, raw_segment_id)
-);
-
-CREATE INDEX IF NOT EXISTS idx_asset_canonical_segment_sources_canonical
-    ON asset_canonical_segment_sources(canonical_segment_id);

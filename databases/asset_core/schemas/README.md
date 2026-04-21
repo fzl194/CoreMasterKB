@@ -54,8 +54,6 @@ active release
 | 构建视图 | `asset_builds` | 一次完整知识构建 |
 | 构建清单 | `asset_build_document_snapshots` | build 中 document -> snapshot 的选择 |
 | 发布控制 | `asset_publish_releases` | 哪个 build 当前在某个 channel 上 active |
-| 兼容保留 | `asset_canonical_segments` | 旧兼容表 |
-| 兼容保留 | `asset_canonical_segment_sources` | 旧兼容表 |
 
 ## 设计原则
 
@@ -109,15 +107,6 @@ asset_document_snapshot_links
 ```
 
 Serving 永远只读当前 channel 的 active release。
-
-### 5. `canonical` 保留但降级
-
-以下两张表仍保留：
-
-- `asset_canonical_segments`
-- `asset_canonical_segment_sources`
-
-但它们不再是 1.1 主路径。
 
 ## 当前最关键的三张表
 
