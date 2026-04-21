@@ -1,120 +1,152 @@
-"""Verify Pydantic models serialize/deserialize correctly."""
+"""Tests for v1.1 data models."""
 import pytest
+
 from agent_serving.serving.schemas.models import (
-    SearchRequest,
-    CommandUsageRequest,
-    EvidencePack,
+    ActiveScope,
+    ContextItem,
+    ContextPack,
+    ContextQuery,
+    ContextRelation,
+    EntityRef,
+    ExpansionConfig,
+    Issue,
     NormalizedQuery,
     QueryPlan,
-    EntityRef,
-    QueryScope,
-    CanonicalItem,
-    EvidenceItem,
-    Gap,
-    ConflictInfo,
-    VariantInfo,
+    RetrievalBudget,
+    RetrievalCandidate,
+    SearchRequest,
+    SourceRef,
+)
+from agent_serving.serving.schemas.constants import (
+    INTENT_COMMAND_USAGE,
+    KIND_RAW_SEGMENT,
+    KIND_RETRIEVAL_UNIT,
+    ROLE_SEED,
+    ROLE_CONTEXT,
 )
 
 
-def test_search_request_defaults():
-    req = SearchRequest(query="ADD APN 怎么写")
-    assert req.query == "ADD APN 怎么写"
-    assert req.scope is None
-    assert req.entities is None
-    assert req.debug is False
+class TestSearchRequest:
+    def test_minimal(self):
+        req = SearchRequest(query="ADD APN")
+        assert req.query == "ADD APN"
+        assert req.scope is None
+        assert req.entities is None
+        assert req.debug is False
+
+    def test_full(self):
+        req = SearchRequest(
+            query="ADD APN",
+            scope={"products": ["UDG"]},
+            entities=[EntityRef(type="command", name="ADD APN")],
+            debug=True,
+        )
+        assert req.scope == {"products": ["UDG"]}
+        assert len(req.entities) == 1
+        assert req.debug is True
 
 
-def test_command_usage_request():
-    req = CommandUsageRequest(query="UDG V100R023C10 ADD APN")
-    assert req.query == "UDG V100R023C10 ADD APN"
+class TestNormalizedQuery:
+    def test_defaults(self):
+        nq = NormalizedQuery()
+        assert nq.intent == "general"
+        assert nq.entities == []
+        assert nq.scope == {}
+        assert nq.keywords == []
+
+    def test_with_values(self):
+        nq = NormalizedQuery(
+            original_query="ADD APN怎么用",
+            intent=INTENT_COMMAND_USAGE,
+            entities=[EntityRef(type="command", name="ADD APN")],
+            scope={"products": ["UDG"]},
+            keywords=["APN", "配置"],
+            desired_roles=["parameter", "example"],
+        )
+        assert nq.intent == INTENT_COMMAND_USAGE
+        assert len(nq.entities) == 1
+        assert nq.desired_roles == ["parameter", "example"]
 
 
-def test_normalized_query_with_entities():
-    nq = NormalizedQuery(
-        intent="command_usage",
-        entities=[EntityRef(type="command", name="ADD APN", normalized_name="ADD APN")],
-        scope=QueryScope(products=["UDG"], product_versions=["V100R023C10"]),
-        keywords=[],
-        missing_constraints=[],
-    )
-    assert nq.intent == "command_usage"
-    assert nq.entities[0].type == "command"
-    assert nq.scope.products == ["UDG"]
+class TestQueryPlan:
+    def test_defaults(self):
+        plan = QueryPlan()
+        assert plan.budget.max_items == 10
+        assert plan.expansion.enable_relation_expansion is True
+        assert plan.expansion.max_relation_depth == 2
+
+    def test_budget_override(self):
+        plan = QueryPlan(budget=RetrievalBudget(max_items=5))
+        assert plan.budget.max_items == 5
 
 
-def test_query_plan_defaults():
-    plan = QueryPlan()
-    assert plan.intent == "general"
-    assert plan.variant_policy == "flag"
-    assert plan.conflict_policy == "flag_not_answer"
-    assert plan.evidence_budget.canonical_limit == 10
-    assert plan.expansion.use_ontology is False
+class TestActiveScope:
+    def test_construction(self):
+        scope = ActiveScope(
+            release_id="rel-1",
+            build_id="build-1",
+            snapshot_ids=["snap-1", "snap-2"],
+            document_snapshot_map={"doc-1": "snap-1"},
+        )
+        assert len(scope.snapshot_ids) == 2
+        assert scope.document_snapshot_map["doc-1"] == "snap-1"
 
 
-def test_evidence_pack_serialization():
-    pack = EvidencePack(
-        query="ADD APN",
-        intent="command_usage",
-        normalized_query="intent=command_usage command=ADD APN",
-        canonical_items=[
-            CanonicalItem(
-                id="c1", canonical_key="CANON_ADD_APN",
-                block_type="paragraph", semantic_role="parameter",
-                title="ADD APN", canonical_text="ADD APN 归并文本",
-                entity_refs=[EntityRef(type="command", name="ADD APN", normalized_name="ADD APN")],
-                scope=QueryScope(products=["UDG", "UNC"]),
-                has_variants=True, variant_policy="require_scope",
-            )
-        ],
-        evidence_items=[],
-        conflicts=[
-            ConflictInfo(raw_text="冲突版本", diff_summary="参数描述矛盾"),
-        ],
-        gaps=[
-            Gap(field="product", reason="需要指定产品", suggested_options=["UDG", "UNC"]),
-        ],
-    )
-    data = pack.model_dump()
-    assert data["intent"] == "command_usage"
-    assert len(data["canonical_items"]) == 1
-    assert data["canonical_items"][0]["block_type"] == "paragraph"
-    assert len(data["conflicts"]) == 1
-    assert len(data["gaps"]) == 1
-    assert data["gaps"][0]["field"] == "product"
+class TestContextPack:
+    def test_empty_pack(self):
+        pack = ContextPack(
+            query=ContextQuery(original="test", normalized="test", intent="general"),
+        )
+        assert pack.items == []
+        assert pack.relations == []
+        assert pack.sources == []
+        assert pack.issues == []
+        assert pack.suggestions == []
+
+    def test_full_pack(self):
+        pack = ContextPack(
+            query=ContextQuery(original="ADD APN", normalized="intent=command_usage", intent="command_usage"),
+            items=[
+                ContextItem(id="ru-1", kind=KIND_RETRIEVAL_UNIT, role=ROLE_SEED, text="text", score=1.0),
+                ContextItem(id="seg-1", kind=KIND_RAW_SEGMENT, role=ROLE_CONTEXT, text="raw", score=0.0),
+            ],
+            relations=[
+                ContextRelation(id="rel-1", from_id="seg-1", to_id="seg-2", relation_type="next", distance=1),
+            ],
+            sources=[
+                SourceRef(id="doc-1", document_key="UDG_OM"),
+            ],
+            issues=[
+                Issue(type="no_result", message="empty"),
+            ],
+            suggestions=["try different keywords"],
+        )
+        assert len(pack.items) == 2
+        assert len(pack.relations) == 1
+        assert pack.items[0].role == ROLE_SEED
+        assert pack.relations[0].relation_type == "next"
+
+    def test_serialization(self):
+        pack = ContextPack(
+            query=ContextQuery(original="test", normalized="test", intent="general"),
+        )
+        data = pack.model_dump()
+        assert isinstance(data, dict)
+        assert "items" in data
+        assert "relations" in data
+
+        # Round-trip
+        restored = ContextPack.model_validate(data)
+        assert restored.query.original == "test"
 
 
-def test_scope_model():
-    scope = QueryScope(
-        products=["UDG"],
-        product_versions=["V100R023C10"],
-        network_elements=["UDM"],
-    )
-    assert scope.products == ["UDG"]
-    assert scope.projects == []
-    assert scope.domains == []
-
-
-def test_search_request_with_scope_and_entities():
-    req = SearchRequest(
-        query="ADD APN",
-        scope=QueryScope(products=["UDG"]),
-        entities=[EntityRef(type="command", name="ADD APN")],
-        debug=True,
-    )
-    assert req.scope.products == ["UDG"]
-    assert len(req.entities) == 1
-    assert req.debug is True
-
-
-def test_evidence_item_has_structure():
-    from agent_serving.serving.schemas.models import EvidenceItem
-    item = EvidenceItem(
-        id="rs-1",
-        block_type="table",
-        semantic_role="parameter",
-        raw_text="table content",
-        structure={"columns": ["col1", "col2"], "rows": [["a", "b"]]},
-        source_offsets={"start": 0, "end": 100},
-    )
-    assert item.structure["columns"] == ["col1", "col2"]
-    assert item.source_offsets["start"] == 0
+class TestRetrievalCandidate:
+    def test_construction(self):
+        c = RetrievalCandidate(
+            retrieval_unit_id="ru-1",
+            score=0.95,
+            source="fts_bm25",
+        )
+        assert c.score == 0.95
+        assert c.source == "fts_bm25"
+        assert c.metadata == {}

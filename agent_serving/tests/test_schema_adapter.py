@@ -1,4 +1,4 @@
-"""Tests for schema adapter — direct SQLite DDL loading."""
+"""Tests for schema adapter — v1.1 SQLite DDL loading."""
 import pytest
 import aiosqlite
 from agent_serving.serving.repositories.schema_adapter import (
@@ -9,12 +9,17 @@ from agent_serving.serving.repositories.schema_adapter import (
 
 def test_load_sqlite_ddl_contains_all_tables():
     ddl = load_sqlite_ddl()
+    # v1.1 tables
     assert "asset_source_batches" in ddl
-    assert "asset_publish_versions" in ddl
-    assert "asset_raw_documents" in ddl
+    assert "asset_documents" in ddl
+    assert "asset_document_snapshots" in ddl
+    assert "asset_document_snapshot_links" in ddl
     assert "asset_raw_segments" in ddl
-    assert "asset_canonical_segments" in ddl
-    assert "asset_canonical_segment_sources" in ddl
+    assert "asset_raw_segment_relations" in ddl
+    assert "asset_retrieval_units" in ddl
+    assert "asset_builds" in ddl
+    assert "asset_build_document_snapshots" in ddl
+    assert "asset_publish_releases" in ddl
 
 
 def test_sqlite_ddl_has_no_pg_syntax():
@@ -33,42 +38,42 @@ async def test_create_tables_in_sqlite():
     )
     tables = [row[0] for row in await cursor.fetchall()]
     assert "asset_source_batches" in tables
-    assert "asset_publish_versions" in tables
-    assert "asset_raw_documents" in tables
+    assert "asset_documents" in tables
+    assert "asset_document_snapshots" in tables
     assert "asset_raw_segments" in tables
-    assert "asset_canonical_segments" in tables
-    assert "asset_canonical_segment_sources" in tables
+    assert "asset_retrieval_units" in tables
+    assert "asset_builds" in tables
+    assert "asset_publish_releases" in tables
     await db.close()
 
 
 @pytest.mark.asyncio
-async def test_sqlite_ddl_has_v05_fields():
-    """Verify v0.5 fields exist in the created tables."""
+async def test_sqlite_ddl_has_v11_fields():
+    """Verify v1.1 fields exist in the created tables."""
     db = await aiosqlite.connect(":memory:")
     await create_asset_tables_sqlite(db)
 
-    # raw_documents should have scope_json, not product
-    cursor = await db.execute("PRAGMA table_info(asset_raw_documents)")
-    cols = {row[1] for row in await cursor.fetchall()}
-    assert "scope_json" in cols
-    assert "product" not in cols
-    assert "entity_refs_json" not in cols  # that's in segments, not docs
-
-    # raw_segments should have entity_refs_json, not command_name
+    # raw_segments should have entity_refs_json, block_type, semantic_role
     cursor = await db.execute("PRAGMA table_info(asset_raw_segments)")
     cols = {row[1] for row in await cursor.fetchall()}
     assert "entity_refs_json" in cols
     assert "block_type" in cols
     assert "semantic_role" in cols
-    assert "command_name" not in cols
-    assert "segment_type" not in cols
+    assert "document_snapshot_id" in cols
 
-    # canonical_segments should have entity_refs_json, scope_json
-    cursor = await db.execute("PRAGMA table_info(asset_canonical_segments)")
+    # retrieval_units should have source_refs_json, facets_json
+    cursor = await db.execute("PRAGMA table_info(asset_retrieval_units)")
     cols = {row[1] for row in await cursor.fetchall()}
-    assert "entity_refs_json" in cols
-    assert "scope_json" in cols
-    assert "block_type" in cols
-    assert "semantic_role" in cols
+    assert "source_refs_json" in cols
+    assert "facets_json" in cols
+    assert "text" in cols
+    assert "search_text" in cols
+
+    # publish_releases should have channel, status
+    cursor = await db.execute("PRAGMA table_info(asset_publish_releases)")
+    cols = {row[1] for row in await cursor.fetchall()}
+    assert "channel" in cols
+    assert "build_id" in cols
+    assert "status" in cols
 
     await db.close()

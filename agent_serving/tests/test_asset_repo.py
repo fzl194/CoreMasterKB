@@ -1,24 +1,11 @@
-"""Tests for AssetRepository — QueryPlan-based L1/L2/L0 access."""
+"""Tests for v1.1 AssetRepository — active scope, source drill-down, relations."""
+import json
+
 import pytest
 import pytest_asyncio
+
 from agent_serving.serving.repositories.asset_repo import AssetRepository
-from agent_serving.serving.schemas.models import (
-    EntityRef, EvidenceBudget, ExpansionConfig, QueryPlan, QueryScope,
-)
-from agent_serving.tests.conftest import ACTIVE_PV_ID, SEED_IDS
-
-
-def _plan(**overrides) -> QueryPlan:
-    defaults = {
-        "intent": "command_usage",
-        "entity_constraints": [EntityRef(type="command", name="ADD APN", normalized_name="ADD APN")],
-        "scope_constraints": QueryScope(),
-        "evidence_budget": EvidenceBudget(canonical_limit=10, raw_per_canonical=3),
-        "expansion": ExpansionConfig(),
-        "keywords": [],
-    }
-    defaults.update(overrides)
-    return QueryPlan(**defaults)
+from agent_serving.tests.conftest import SEED_IDS
 
 
 @pytest_asyncio.fixture
@@ -26,98 +13,103 @@ async def repo(db_connection):
     return AssetRepository(db_connection)
 
 
-@pytest.mark.asyncio
-async def test_get_active_publish_version_id(repo):
-    pv_id, error = await repo.get_active_publish_version_id()
-    assert pv_id == ACTIVE_PV_ID
-    assert error is None
+class TestResolveActiveScope:
+    @pytest.mark.asyncio
+    async def test_active_scope_found(self, repo, seed_ids):
+        scope = await repo.resolve_active_scope()
+        assert scope.release_id == seed_ids["release_id"]
+        assert scope.build_id == seed_ids["build_id"]
+        assert len(scope.snapshot_ids) == 3
+        assert len(scope.document_snapshot_map) > 0
+
+    @pytest.mark.asyncio
+    async def test_no_active_release(self, db_connection):
+        await db_connection.execute(
+            "UPDATE asset_publish_releases SET status = 'retired' WHERE id = ?",
+            (SEED_IDS["release_id"],),
+        )
+        await db_connection.commit()
+        repo = AssetRepository(db_connection)
+
+        with pytest.raises(ValueError, match="no_active_release"):
+            await repo.resolve_active_scope()
+
+    @pytest.mark.asyncio
+    async def test_multiple_active_releases(self, db_connection):
+        # The UNIQUE constraint on (channel) WHERE status='active' prevents
+        # inserting a second active release in the same channel.
+        # Test with a different channel to verify the logic still catches it.
+        # Since the unique index blocks same-channel, we test by checking the
+        # unique index catches it when we try same channel.
+        with pytest.raises(Exception):
+            # This should fail due to UNIQUE constraint
+            await db_connection.execute(
+                "INSERT INTO asset_publish_releases "
+                "(id, release_code, build_id, channel, status, metadata_json) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                ("dup-release", "DUP-001", SEED_IDS["build_id"], "default", "active", "{}"),
+            )
 
 
-@pytest.mark.asyncio
-async def test_search_canonical_by_entity_command(repo):
-    plan = _plan()
-    results = await repo.search_canonical(plan)
-    assert len(results) >= 1
-    assert any("ADD APN" in r["canonical_text"] for r in results)
+class TestResolveSourceSegments:
+    @pytest.mark.asyncio
+    async def test_valid_source_refs(self, repo, seed_ids):
+        source_refs = json.dumps({"raw_segment_ids": [seed_ids["rs_add_apn_udg"]]})
+        segments = await repo.resolve_source_segments(source_refs)
+        assert len(segments) == 1
+        assert segments[0]["id"] == seed_ids["rs_add_apn_udg"]
+        assert segments[0]["raw_text"] is not None
+
+    @pytest.mark.asyncio
+    async def test_empty_source_refs(self, repo):
+        segments = await repo.resolve_source_segments(None)
+        assert segments == []
+
+    @pytest.mark.asyncio
+    async def test_malformed_json(self, repo):
+        segments = await repo.resolve_source_segments("not json")
+        assert segments == []
+
+    @pytest.mark.asyncio
+    async def test_multiple_segments(self, repo, seed_ids):
+        source_refs = json.dumps({
+            "raw_segment_ids": [seed_ids["rs_add_apn_udg"], seed_ids["rs_5g_concept"]],
+        })
+        segments = await repo.resolve_source_segments(source_refs)
+        assert len(segments) == 2
 
 
-@pytest.mark.asyncio
-async def test_search_canonical_by_keyword(repo):
-    plan = _plan(
-        intent="general",
-        entity_constraints=[],
-        keywords=["5G"],
-    )
-    results = await repo.search_canonical(plan)
-    assert len(results) >= 1
-    assert any("5G" in r["canonical_text"] for r in results)
+class TestGetRelations:
+    @pytest.mark.asyncio
+    async def test_relations_for_segments(self, repo, seed_ids):
+        relations = await repo.get_relations_for_segments(
+            [seed_ids["rs_add_apn_udg"]],
+        )
+        assert len(relations) >= 1
+        assert any(r["relation_type"] == "next" for r in relations)
+
+    @pytest.mark.asyncio
+    async def test_empty_segment_list(self, repo):
+        relations = await repo.get_relations_for_segments([])
+        assert relations == []
+
+    @pytest.mark.asyncio
+    async def test_relation_type_filter(self, repo, seed_ids):
+        relations = await repo.get_relations_for_segments(
+            [seed_ids["rs_add_apn_udg"]],
+            relation_types=["next"],
+        )
+        assert all(r["relation_type"] == "next" for r in relations)
 
 
-@pytest.mark.asyncio
-async def test_search_canonical_by_alarm_keyword(repo):
-    """Alarm entities are searched via entity name matching search_text LIKE."""
-    plan = _plan(
-        intent="troubleshooting",
-        entity_constraints=[],
-        keywords=["CPU过载"],
-    )
-    results = await repo.search_canonical(plan)
-    assert len(results) >= 1
-    assert any("CPU" in r["canonical_text"] for r in results)
+class TestGetDocumentSources:
+    @pytest.mark.asyncio
+    async def test_fetch_documents(self, repo, seed_ids):
+        sources = await repo.get_document_sources([seed_ids["doc_udg"]])
+        assert len(sources) >= 1
+        assert any(s["document_key"] == "UDG_OM_REF" for s in sources)
 
-
-@pytest.mark.asyncio
-async def test_search_canonical_empty_result(repo):
-    plan = _plan(
-        entity_constraints=[EntityRef(type="command", name="NOTEXIST", normalized_name="notexist")],
-    )
-    results = await repo.search_canonical(plan)
-    assert results == []
-
-
-@pytest.mark.asyncio
-async def test_drill_down_with_scope_filter(repo):
-    plan = _plan(
-        scope_constraints=QueryScope(products=["UDG"], product_versions=["V100R023C10"]),
-    )
-    evidence, variants, conflicts = await repo.drill_down(
-        canonical_segment_id=SEED_IDS["canon_add_apn"],
-        plan=plan,
-    )
-    assert len(evidence) >= 1
-    assert any("UDG" in r["raw_text"] for r in evidence)
-
-
-@pytest.mark.asyncio
-async def test_drill_down_no_scope_primary_evidence_variants_separated(repo):
-    """Without scope constraints, scope_variant goes to variants (scope insufficient)."""
-    plan = _plan()
-    evidence, variants, conflicts = await repo.drill_down(
-        canonical_segment_id=SEED_IDS["canon_add_apn"],
-        plan=plan,
-    )
-    assert len(evidence) >= 1  # primary evidence
-    assert len(variants) >= 1  # scope_variant goes to variants when no scope
-
-
-@pytest.mark.asyncio
-async def test_drill_down_separates_conflicts(repo):
-    plan = _plan()
-    evidence, variants, conflicts = await repo.drill_down(
-        canonical_segment_id=SEED_IDS["canon_add_apn"],
-        plan=plan,
-    )
-    assert len(conflicts) >= 1
-    assert all(c["relation_type"] == "conflict_candidate" for c in conflicts)
-    conflict_ids = {c["id"] for c in conflicts}
-    evidence_ids = {e["id"] for e in evidence}
-    assert conflict_ids.isdisjoint(evidence_ids)
-
-
-@pytest.mark.asyncio
-async def test_get_conflict_sources(repo):
-    conflicts = await repo.get_conflict_sources(
-        canonical_segment_id=SEED_IDS["canon_add_apn"],
-    )
-    assert len(conflicts) >= 1
-    assert all(c["relation_type"] == "conflict_candidate" for c in conflicts)
+    @pytest.mark.asyncio
+    async def test_empty_ids(self, repo):
+        sources = await repo.get_document_sources([])
+        assert sources == []

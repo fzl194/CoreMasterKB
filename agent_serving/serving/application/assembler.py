@@ -1,391 +1,300 @@
-"""EvidenceAssembler — build EvidencePack from query results.
+"""ContextAssembler — builds ContextPack from retrieval results.
 
-Separates evidence, variants, conflicts, and gaps.
-Uses v0.5 field names (block_type, semantic_role, entity_refs_json, scope_json).
+v1.1 design:
+- seed items from retrieval_candidates (retrieval_units)
+- source drill-down via resolve_source_segments (parsed source_refs_json)
+- context expansion via GraphExpander relations
+- first-class relations list in output
+- document attribution via document_snapshot_map
 """
 from __future__ import annotations
 
 import json
+import logging
+from typing import Any
 
 from agent_serving.serving.schemas.models import (
-    CanonicalItem,
-    ConflictInfo,
-    EntityRef,
-    EvidenceItem,
-    EvidencePack,
-    Gap,
+    ActiveScope,
+    ContextItem,
+    ContextPack,
+    ContextQuery,
+    ContextRelation,
+    Issue,
     NormalizedQuery,
     QueryPlan,
-    QueryScope,
+    RetrievalCandidate,
     SourceRef,
-    UnparsedDocument,
-    VariantInfo,
+)
+from agent_serving.serving.schemas.constants import (
+    KIND_RAW_SEGMENT,
+    KIND_RETRIEVAL_UNIT,
+    ROLE_CONTEXT,
+    ROLE_SEED,
+    ROLE_SUPPORT,
+)
+from agent_serving.serving.repositories.asset_repo import AssetRepository
+from agent_serving.serving.retrieval.graph_expander import (
+    GraphExpander,
+    parse_source_refs,
 )
 
+logger = logging.getLogger(__name__)
 
-class EvidenceAssembler:
-    def assemble(
+
+class ContextAssembler:
+    """Assembles ContextPack from retrieval + expansion results."""
+
+    def __init__(self, repo: AssetRepository, graph: GraphExpander) -> None:
+        self._repo = repo
+        self._graph = graph
+
+    async def assemble(
         self,
         *,
         query: str,
-        intent: str,
         normalized: NormalizedQuery,
         plan: QueryPlan,
-        canonical_hits: list[dict],
-        drill_results: list[tuple[list[dict], list[dict], list[dict]]],
-        unparsed_docs: list[dict] | None = None,
-    ) -> EvidencePack:
-        """Assemble EvidencePack from drill-down results.
+        scope: ActiveScope,
+        candidates: list[RetrievalCandidate],
+    ) -> ContextPack:
+        """Full assembly pipeline: seed → source drill-down → expansion → pack."""
+        # 1. Build seed items from retrieval candidates
+        seed_items = self._build_seed_items(candidates)
 
-        drill_results is a list of (evidence, variants, conflicts) tuples,
-        one per canonical hit.
-        unparsed_docs: documents registered but not parsed into segments.
-        """
-        # Build canonical items
-        canonical_items = [
-            self._build_canonical_item(h) for h in canonical_hits
-        ]
+        # 2. Source drill-down: parse source_refs_json for each seed
+        all_source_segment_ids: list[str] = []
+        seed_to_sources: dict[str, list[str]] = {}
 
-        # Build evidence, variants, conflicts, sources from drill results
-        all_evidence: list[dict] = []
-        all_variants: list[dict] = []
-        all_conflicts: list[dict] = []
+        for candidate in candidates:
+            source_refs = candidate.metadata.get("source_refs_json", "{}")
+            seg_ids = parse_source_refs(source_refs)
+            seed_to_sources[candidate.retrieval_unit_id] = seg_ids
+            all_source_segment_ids.extend(seg_ids)
 
-        for evidence_rows, variant_rows, conflict_rows in drill_results:
-            all_evidence.extend(evidence_rows)
-            all_variants.extend(variant_rows)
-            all_conflicts.extend(conflict_rows)
+        # Deduplicate
+        seen_segs: set[str] = set()
+        unique_seg_ids: list[str] = []
+        for sid in all_source_segment_ids:
+            if sid not in seen_segs:
+                seen_segs.add(sid)
+                unique_seg_ids.append(sid)
 
-        evidence_items = [self._build_evidence_item(r) for r in all_evidence]
-        sources = [self._build_source(r) for r in all_evidence]
-        variants = [self._build_variant(r) for r in all_variants]
-        conflicts = [self._build_conflict(r) for r in all_conflicts]
+        # 3. Fetch source segments
+        source_segments = await self._repo.resolve_source_segments(
+            json.dumps({"raw_segment_ids": unique_seg_ids}) if unique_seg_ids else None,
+        )
+        source_seg_map = {str(s["id"]): s for s in source_segments}
 
-        # Build gaps
-        gaps = self._build_gaps(normalized, canonical_hits, all_variants)
+        # Build source items
+        source_items = self._build_source_items(source_segments)
 
-        # Matched entities and scope from canonical hits
-        matched_entities = self._collect_entities(canonical_hits)
-        matched_scope = self._collect_scope(canonical_hits)
+        # 4. Graph expansion if enabled
+        expanded_items: list[ContextItem] = []
+        relation_items: list[ContextRelation] = []
 
-        # Build followups
-        followups = self._build_followups(gaps, conflicts)
+        if plan.expansion.enable_relation_expansion and unique_seg_ids:
+            expansions = await self._graph.expand(
+                seed_segment_ids=unique_seg_ids,
+                max_depth=plan.expansion.max_relation_depth,
+                relation_types=plan.expansion.relation_types or None,
+                max_results=plan.budget.max_expanded,
+            )
 
-        # Build unparsed documents
-        unparsed_items = self._build_unparsed_docs(unparsed_docs or [])
+            # Fetch expanded segment data
+            expanded_data = await self._graph.fetch_expanded_segments(expansions)
+            expanded_items = self._build_expanded_items(expanded_data)
 
-        return EvidencePack(
-            query=query,
-            intent=intent,
-            normalized_query=self._build_normalized_str(normalized),
-            query_plan=plan,
-            canonical_items=canonical_items,
-            evidence_items=evidence_items,
+            # Build relation links from expansions
+            for exp in expansions:
+                relation_items.append(ContextRelation(
+                    id=f"rel-{exp['from_segment_id']}-{exp['segment_id']}",
+                    from_id=exp["from_segment_id"],
+                    to_id=exp["segment_id"],
+                    relation_type=exp["relation_type"],
+                    distance=exp["depth"],
+                ))
+
+        # 5. Fetch direct relations for seed segments
+        if unique_seg_ids:
+            direct_relations = await self._repo.get_relations_for_segments(
+                unique_seg_ids,
+                relation_types=plan.expansion.relation_types or None,
+            )
+            for rel in direct_relations:
+                rid = str(rel["id"])
+                relation_items.append(ContextRelation(
+                    id=rid,
+                    from_id=str(rel["from_segment_id"]),
+                    to_id=str(rel["to_segment_id"]),
+                    relation_type=rel["relation_type"],
+                    distance=0,
+                ))
+
+        # Deduplicate relations
+        seen_rels: set[str] = set()
+        unique_relations: list[ContextRelation] = []
+        for r in relation_items:
+            if r.id not in seen_rels:
+                seen_rels.add(r.id)
+                unique_relations.append(r)
+
+        # 6. Build source references (document attribution)
+        document_ids = set()
+        for seg in source_segments:
+            if seg.get("document_id"):
+                document_ids.add(str(seg["document_id"]))
+
+        doc_sources = await self._repo.get_document_sources(list(document_ids))
+        sources = self._build_sources(doc_sources)
+
+        # 7. Build issues
+        issues = self._build_issues(seed_items, normalized)
+
+        # 8. Assemble final pack
+        all_items = seed_items + source_items + expanded_items
+        # Truncate to budget
+        all_items = all_items[:plan.budget.max_items + plan.budget.max_expanded]
+
+        return ContextPack(
+            query=ContextQuery(
+                original=query,
+                normalized=self._format_normalized(normalized),
+                intent=normalized.intent,
+                entities=normalized.entities,
+                scope=normalized.scope,
+                keywords=normalized.keywords,
+            ),
+            items=all_items,
+            relations=unique_relations,
             sources=sources,
-            matched_entities=matched_entities,
-            matched_scope=matched_scope,
-            variants=variants,
-            conflicts=conflicts,
-            gaps=gaps,
-            suggested_followups=followups,
-            unparsed_documents=unparsed_items,
+            issues=issues,
+            suggestions=self._build_suggestions(issues),
         )
 
-    def _build_canonical_item(self, h: dict) -> CanonicalItem:
-        entity_refs = _parse_entity_refs(h.get("entity_refs_json", "[]"))
-        scope = _parse_scope(h.get("scope_json", "{}"))
-
-        return CanonicalItem(
-            id=str(h["id"]),
-            canonical_key=h.get("canonical_key", ""),
-            block_type=h.get("block_type", "unknown"),
-            semantic_role=h.get("semantic_role", "unknown"),
-            title=h.get("title"),
-            canonical_text=h["canonical_text"],
-            summary=h.get("summary"),
-            entity_refs=entity_refs,
-            scope=scope,
-            has_variants=bool(h.get("has_variants")),
-            variant_policy=h.get("variant_policy", "none"),
-            quality_score=h.get("quality_score"),
-        )
-
-    def _build_evidence_item(self, r: dict) -> EvidenceItem:
-        entity_refs = _parse_entity_refs(r.get("entity_refs_json", "[]"))
-        structure = _parse_json_dict(r.get("structure_json", "{}"))
-        source_offsets = _parse_json_dict(r.get("source_offsets_json", "{}"))
-
-        return EvidenceItem(
-            id=str(r["id"]),
-            block_type=r.get("block_type", "unknown"),
-            semantic_role=r.get("semantic_role", "unknown"),
-            raw_text=r["raw_text"],
-            section_path=_parse_section_path(r.get("section_path", "[]")),
-            section_title=r.get("section_title"),
-            entity_refs=entity_refs,
-            structure=structure,
-            source_offsets=source_offsets,
-        )
-
-    def _build_source(self, r: dict) -> SourceRef:
-        scope = _parse_scope(r.get("doc_scope_json", "{}"))
-        tags = _parse_json_list(r.get("tags_json", "[]"))
-        processing_profile = _parse_json_dict(r.get("processing_profile_json", "{}"))
-
-        return SourceRef(
-            document_key=r.get("document_key", ""),
-            relative_path=r.get("relative_path"),
-            section_path=_parse_section_path(r.get("section_path", "[]")),
-            block_type=r.get("block_type"),
-            scope=scope,
-            file_type=r.get("file_type"),
-            document_type=r.get("document_type"),
-            tags=tags,
-            processing_profile=processing_profile,
-        )
-
-    def _build_variant(self, r: dict) -> VariantInfo:
-        scope = _parse_scope(r.get("doc_scope_json", "{}"))
-
-        return VariantInfo(
-            raw_segment_id=str(r["id"]),
-            relation_type=r.get("relation_type", "scope_variant"),
-            diff_summary=r.get("diff_summary"),
-            scope=scope,
-        )
-
-    def _build_conflict(self, r: dict) -> ConflictInfo:
-        scope = _parse_scope(r.get("doc_scope_json", "{}"))
-        entity_refs = _parse_entity_refs(r.get("entity_refs_json", "[]"))
-        source = SourceRef(
-            document_key=r.get("document_key", ""),
-            relative_path=r.get("relative_path"),
-            section_path=_parse_section_path(r.get("section_path", "[]")),
-            scope=scope,
-            file_type=r.get("file_type"),
-            document_type=r.get("document_type"),
-        )
-
-        return ConflictInfo(
-            raw_segment_id=str(r.get("id", "")) or None,
-            relation_type=r.get("relation_type"),
-            raw_text=r.get("raw_text", ""),
-            diff_summary=r.get("diff_summary"),
-            scope=scope,
-            entity_refs=entity_refs,
-            source=source,
-            section_path=_parse_section_path(r.get("section_path", "[]")),
-        )
-
-    def _build_gaps(
-        self, normalized: NormalizedQuery, hits: list[dict], variants: list[dict],
-    ) -> list[Gap]:
-        gaps: list[Gap] = []
-        has_variants_hit = any(h.get("has_variants") for h in hits)
-
-        if has_variants_hit and normalized.missing_constraints:
-            if "product" in normalized.missing_constraints:
-                # Derive product options from actual variant scopes, not hardcoded list
-                product_options = sorted({
-                    p
-                    for v in variants
-                    for p in _parse_scope(v.get("doc_scope_json", "{}")).products
-                }) if variants else []
-                gaps.append(Gap(
-                    field="product",
-                    reason="该知识在不同产品上有差异，需要指定产品",
-                    suggested_options=product_options,
-                ))
-            if "product_version" in normalized.missing_constraints:
-                gaps.append(Gap(
-                    field="product_version",
-                    reason="该知识在不同版本间可能有差异",
-                    suggested_options=[],
-                ))
-
-        if variants:
-            gaps.append(Gap(
-                field="scope_variant",
-                reason=f"存在 {len(variants)} 个 scope 变体未纳入主 evidence",
-                suggested_options=[],
-            ))
-
-        return gaps
-
-    def _collect_entities(self, hits: list[dict]) -> list[EntityRef]:
-        seen: set[str] = set()
-        result: list[EntityRef] = []
-        for h in hits:
-            refs = _parse_entity_refs(h.get("entity_refs_json", "[]"))
-            for ref in refs:
-                key = f"{ref.type}:{ref.normalized_name}"
-                if key not in seen:
-                    result.append(ref)
-                    seen.add(key)
-        return result
-
-    def _collect_scope(self, hits: list[dict]) -> QueryScope:
-        all_products: set[str] = set()
-        all_versions: set[str] = set()
-        all_nes: set[str] = set()
-        all_projects: set[str] = set()
-        all_domains: set[str] = set()
-        all_scenarios: set[str] = set()
-        all_authors: set[str] = set()
-
-        for h in hits:
-            scope = _parse_scope(h.get("scope_json", "{}"))
-            all_products.update(scope.products)
-            all_versions.update(scope.product_versions)
-            all_nes.update(scope.network_elements)
-            all_projects.update(scope.projects)
-            all_domains.update(scope.domains)
-            all_scenarios.update(scope.scenarios)
-            all_authors.update(scope.authors)
-
-        return QueryScope(
-            products=sorted(all_products),
-            product_versions=sorted(all_versions),
-            network_elements=sorted(all_nes),
-            projects=sorted(all_projects),
-            domains=sorted(all_domains),
-            scenarios=sorted(all_scenarios),
-            authors=sorted(all_authors),
-        )
-
-    def _build_followups(self, gaps: list[Gap], conflicts: list[ConflictInfo]) -> list[str]:
-        parts: list[str] = []
-        gap_fields = [g.field for g in gaps if g.field != "scope_variant"]
-        if gap_fields:
-            parts.append(f"请确认{'/'.join(gap_fields)}以获取精确答案")
-        if conflicts:
-            parts.append(f"发现 {len(conflicts)} 处知识冲突，建议核实产品版本后重新查询")
-        if any(g.field == "scope_variant" for g in gaps):
-            parts.append("部分 scope 变体未展示，可指定更精确的产品/版本/网元缩小范围")
-        return parts
-
-    def _build_normalized_str(self, normalized: NormalizedQuery) -> str:
-        parts: list[str] = []
-        parts.append(f"intent={normalized.intent}")
-        for e in normalized.entities:
-            parts.append(f"{e.type}={e.name}")
-        if normalized.scope.products:
-            parts.append(f"products={','.join(normalized.scope.products)}")
-        if normalized.scope.product_versions:
-            parts.append(f"versions={','.join(normalized.scope.product_versions)}")
-        if normalized.scope.network_elements:
-            parts.append(f"nes={','.join(normalized.scope.network_elements)}")
-        parts.extend(normalized.keywords)
-        return " ".join(parts)
-
-    def _build_unparsed_docs(self, raw_docs: list[dict]) -> list[UnparsedDocument]:
-        items: list[UnparsedDocument] = []
-        for doc in raw_docs:
-            scope = _parse_scope(doc.get("scope_json", "{}"))
-            tags = _parse_json_list(doc.get("tags_json", "[]"))
-            processing_profile = _parse_json_dict(doc.get("processing_profile_json", "{}"))
-            items.append(UnparsedDocument(
-                id=str(doc["id"]),
-                document_key=doc.get("document_key", ""),
-                relative_path=doc.get("relative_path"),
-                file_type=doc.get("file_type"),
-                document_type=doc.get("document_type"),
-                scope=scope,
-                tags=tags,
-                processing_profile=processing_profile,
+    def _build_seed_items(
+        self, candidates: list[RetrievalCandidate],
+    ) -> list[ContextItem]:
+        items = []
+        for c in candidates:
+            items.append(ContextItem(
+                id=c.retrieval_unit_id,
+                kind=KIND_RETRIEVAL_UNIT,
+                role=ROLE_SEED,
+                text=c.metadata.get("text", ""),
+                score=c.score,
+                title=c.metadata.get("title"),
+                block_type=c.metadata.get("block_type", "unknown"),
+                semantic_role=c.metadata.get("semantic_role", "unknown"),
+                source_refs=_safe_json_parse(c.metadata.get("source_refs_json", "{}")),
             ))
         return items
 
+    def _build_source_items(
+        self, segments: list[dict[str, Any]],
+    ) -> list[ContextItem]:
+        items = []
+        for seg in segments:
+            items.append(ContextItem(
+                id=str(seg["id"]),
+                kind=KIND_RAW_SEGMENT,
+                role=ROLE_CONTEXT,
+                text=seg.get("raw_text", ""),
+                score=0.0,
+                title=seg.get("snapshot_title"),
+                block_type=seg.get("block_type", "unknown"),
+                semantic_role=seg.get("semantic_role", "unknown"),
+                source_id=str(seg.get("document_id", "")),
+                source_refs={},
+            ))
+        return items
 
-# --- JSON helpers ---
+    def _build_expanded_items(
+        self, expanded: list[dict[str, Any]],
+    ) -> list[ContextItem]:
+        items = []
+        for seg in expanded:
+            items.append(ContextItem(
+                id=str(seg["id"]),
+                kind=KIND_RAW_SEGMENT,
+                role=ROLE_SUPPORT,
+                text=seg.get("raw_text", ""),
+                score=0.0,
+                title=seg.get("doc_title"),
+                block_type=seg.get("block_type", "unknown"),
+                semantic_role=seg.get("semantic_role", "unknown"),
+                source_id=str(seg.get("document_id", "")),
+                relation_to_seed=seg.get("expansion_relation_type", ""),
+            ))
+        return items
 
-def _parse_json_dict(raw: str | dict) -> dict:
+    def _build_sources(
+        self, docs: list[dict[str, Any]],
+    ) -> list[SourceRef]:
+        seen: set[str] = set()
+        sources = []
+        for doc in docs:
+            doc_id = str(doc["id"])
+            if doc_id in seen:
+                continue
+            seen.add(doc_id)
+            sources.append(SourceRef(
+                id=doc_id,
+                document_key=doc.get("document_key", ""),
+                title=doc.get("title"),
+                relative_path=doc.get("relative_path"),
+                scope_json=_safe_json_parse(doc.get("scope_json", "{}")),
+            ))
+        return sources
+
+    def _build_issues(
+        self,
+        items: list[ContextItem],
+        normalized: NormalizedQuery,
+    ) -> list[Issue]:
+        from agent_serving.serving.schemas.constants import (
+            ISSUE_AMBIGUOUS_SCOPE,
+            ISSUE_NO_RESULT,
+            ISSUE_LOW_CONFIDENCE,
+        )
+
+        issues: list[Issue] = []
+
+        if not items:
+            issues.append(Issue(
+                type=ISSUE_NO_RESULT,
+                message="未找到相关内容",
+                detail={"query": normalized.original_query},
+            ))
+        elif all(item.score < 0.1 for item in items):
+            issues.append(Issue(
+                type=ISSUE_LOW_CONFIDENCE,
+                message="检索结果置信度较低",
+                detail={"top_score": max(item.score for item in items)},
+            ))
+
+        return issues
+
+    def _build_suggestions(self, issues: list[Issue]) -> list[str]:
+        suggestions: list[str] = []
+        for issue in issues:
+            if issue.type == "no_result":
+                suggestions.append("尝试使用更通用的关键词")
+            elif issue.type == "low_confidence":
+                suggestions.append("尝试更精确的描述或添加产品/版本约束")
+        return suggestions
+
+    def _format_normalized(self, normalized: NormalizedQuery) -> str:
+        parts = [f"intent={normalized.intent}"]
+        for e in normalized.entities:
+            parts.append(f"{e.type}={e.name}")
+        parts.extend(normalized.keywords)
+        return " ".join(parts)
+
+
+def _safe_json_parse(raw: str | dict) -> dict:
     if isinstance(raw, dict):
         return raw
     try:
         return json.loads(raw)
     except (json.JSONDecodeError, TypeError):
         return {}
-
-
-def _parse_json_list(raw: str | list) -> list[str]:
-    if isinstance(raw, list):
-        return raw
-    try:
-        parsed = json.loads(raw)
-        if isinstance(parsed, list):
-            return parsed
-        return []
-    except (json.JSONDecodeError, TypeError):
-        return []
-
-
-def _parse_section_path(raw: str | list) -> list[str]:
-    if isinstance(raw, list):
-        if raw and isinstance(raw[0], dict):
-            return [item.get("title", "") for item in raw if item.get("title")]
-        return raw
-    try:
-        parsed = json.loads(raw)
-        if isinstance(parsed, list):
-            if parsed and isinstance(parsed[0], dict):
-                return [item.get("title", "") for item in parsed if item.get("title")]
-            return parsed
-        return []
-    except (json.JSONDecodeError, TypeError):
-        return []
-
-
-def _parse_entity_refs(raw: str | list) -> list[EntityRef]:
-    if isinstance(raw, list):
-        items = raw
-    else:
-        try:
-            items = json.loads(raw)
-        except (json.JSONDecodeError, TypeError):
-            return []
-    return [
-        EntityRef(
-            type=item.get("type", "unknown"),
-            name=item.get("name", ""),
-            normalized_name=item.get("normalized_name", item.get("name", "")),
-        )
-        for item in items
-        if isinstance(item, dict)
-    ]
-
-
-def _parse_scope(raw: str | dict) -> QueryScope:
-    if isinstance(raw, dict):
-        d = raw
-    else:
-        try:
-            d = json.loads(raw)
-        except (json.JSONDecodeError, TypeError):
-            return QueryScope()
-    if not isinstance(d, dict):
-        return QueryScope()
-
-    def _get_list(key: str) -> list[str]:
-        val = d.get(key)
-        if val is None:
-            # Try singular fallback
-            singular = key.rstrip("s")
-            val = d.get(singular)
-        if val is None:
-            return []
-        if isinstance(val, str):
-            return [val]
-        if isinstance(val, list):
-            return val
-        return []
-
-    return QueryScope(
-        products=_get_list("products"),
-        product_versions=_get_list("product_versions"),
-        network_elements=_get_list("network_elements"),
-        projects=_get_list("projects"),
-        domains=_get_list("domains"),
-        scenarios=_get_list("scenarios"),
-        authors=_get_list("authors"),
-    )

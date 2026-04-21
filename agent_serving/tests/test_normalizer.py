@@ -1,7 +1,14 @@
-"""Tests for QueryNormalizer — generic entity/scope extraction."""
+"""Tests for v1.1 QueryNormalizer."""
 import pytest
-from agent_serving.serving.application.normalizer import QueryNormalizer, build_plan
-from agent_serving.serving.schemas.models import EntityRef, QueryScope
+
+from agent_serving.serving.application.normalizer import QueryNormalizer
+from agent_serving.serving.schemas.constants import (
+    INTENT_COMMAND_USAGE,
+    INTENT_CONCEPT_LOOKUP,
+    INTENT_GENERAL,
+    INTENT_PROCEDURE,
+    INTENT_TROUBLESHOOT,
+)
 
 
 @pytest.fixture
@@ -9,103 +16,105 @@ def normalizer():
     return QueryNormalizer()
 
 
-def test_extract_command_with_product_and_version(normalizer):
-    result = normalizer.normalize("UDG V100R023C10 ADD APN 怎么写")
-    assert result.intent == "command_usage"
-    assert any(e.type == "command" and e.name == "ADD APN" for e in result.entities)
-    assert "UDG" in result.scope.products
-    assert "V100R023C10" in result.scope.product_versions
-    assert "product" not in result.missing_constraints
+class TestCommandDetection:
+    def test_add_command(self, normalizer):
+        result = normalizer.normalize("ADD APN怎么用")
+        assert result.intent == INTENT_COMMAND_USAGE
+        assert any(e.type == "command" and "ADD APN" in e.name for e in result.entities)
+
+    def test_show_command(self, normalizer):
+        result = normalizer.normalize("SHOW CPU命令参数")
+        assert result.intent == INTENT_COMMAND_USAGE
+        assert any("SHOW CPU" in e.name for e in result.entities)
+
+    def test_chinese_op_map(self, normalizer):
+        result = normalizer.normalize("新增APN")
+        assert result.intent == INTENT_COMMAND_USAGE
+        assert any("ADD" in e.name for e in result.entities)
+
+    def test_mod_command(self, normalizer):
+        result = normalizer.normalize("修改APN的参数")
+        assert any(e.type == "command" and "MOD" in e.name for e in result.entities)
+
+    def test_del_command(self, normalizer):
+        result = normalizer.normalize("删除APN配置")
+        assert any(e.type == "command" and "DEL" in e.name for e in result.entities)
+
+    def test_command_with_product_and_version(self, normalizer):
+        result = normalizer.normalize("UDG V100R023C10 ADD APN 怎么写")
+        assert result.intent == INTENT_COMMAND_USAGE
+        assert any(e.type == "command" and e.name == "ADD APN" for e in result.entities)
+        assert "products" in result.scope
+        assert "UDG" in result.scope["products"]
 
 
-def test_extract_command_only(normalizer):
-    result = normalizer.normalize("ADD APN 怎么写")
-    assert result.intent == "command_usage"
-    assert any(e.type == "command" for e in result.entities)
-    assert "product" in result.missing_constraints
+class TestIntentDetection:
+    def test_troubleshoot(self, normalizer):
+        result = normalizer.normalize("CPU过载故障怎么排查")
+        assert result.intent == INTENT_TROUBLESHOOT
+
+    def test_concept(self, normalizer):
+        result = normalizer.normalize("5G是什么")
+        assert result.intent == INTENT_CONCEPT_LOOKUP
+
+    def test_procedure(self, normalizer):
+        result = normalizer.normalize("操作步骤流程")
+        assert result.intent == INTENT_PROCEDURE
+
+    def test_general(self, normalizer):
+        result = normalizer.normalize("网络架构")
+        assert result.intent == INTENT_GENERAL
 
 
-def test_extract_with_chinese_operation_word(normalizer):
-    result = normalizer.normalize("新增APN怎么配置")
-    assert result.intent == "command_usage"
-    assert any(e.type == "command" and "ADD" in e.name for e in result.entities)
+class TestScopeExtraction:
+    def test_product_extraction(self, normalizer):
+        result = normalizer.normalize("UDG上的ADD APN命令")
+        assert "products" in result.scope
+        assert "UDG" in result.scope["products"]
+
+    def test_ne_extraction(self, normalizer):
+        result = normalizer.normalize("AMF上的配置")
+        assert "network_elements" in result.scope
+        assert "AMF" in result.scope["network_elements"]
+
+    def test_version_extraction(self, normalizer):
+        result = normalizer.normalize("V100R023版本")
+        assert "product_versions" in result.scope
+        assert "V100R023" in result.scope["product_versions"]
+
+    def test_cloudcore_product(self, normalizer):
+        result = normalizer.normalize("CloudCore 5G 概念")
+        assert "products" in result.scope
+        assert "CLOUDCORE" in result.scope["products"]
+
+    def test_smf_is_ne(self, normalizer):
+        result = normalizer.normalize("SMF 配置 S-NSSAI")
+        assert "network_elements" in result.scope
+        assert "SMF" in result.scope["network_elements"]
+        assert "products" not in result.scope or "SMF" not in result.scope.get("products", [])
 
 
-def test_extract_with_network_element(normalizer):
-    result = normalizer.normalize("AMF ADD APN 怎么写")
-    assert result.intent == "command_usage"
-    assert any(e.type == "command" and e.name == "ADD APN" for e in result.entities)
-    # AMF is a network element, not a product
-    assert "AMF" in result.scope.network_elements
-    assert "AMF" not in result.scope.products
+class TestKeywordExtraction:
+    def test_stopwords_filtered(self, normalizer):
+        result = normalizer.normalize("什么是5G的原理")
+        assert "什么" not in result.keywords
+        assert "是" not in result.keywords
+        assert len(result.keywords) > 0
+
+    def test_original_query_preserved(self, normalizer):
+        result = normalizer.normalize("ADD APN怎么用")
+        assert result.original_query == "ADD APN怎么用"
 
 
-def test_general_query_no_command(normalizer):
-    result = normalizer.normalize("5G是什么")
-    assert result.intent in ("concept_lookup", "general")
-    assert not any(e.type == "command" for e in result.entities)
-    assert any("5G" in kw for kw in result.keywords)
+class TestDesiredRoles:
+    def test_command_roles(self, normalizer):
+        result = normalizer.normalize("ADD APN命令参数")
+        assert "parameter" in result.desired_roles
 
+    def test_troubleshoot_roles(self, normalizer):
+        result = normalizer.normalize("CPU过载告警怎么排查")
+        assert "troubleshooting_step" in result.desired_roles
 
-def test_mod_command(normalizer):
-    result = normalizer.normalize("修改APN的参数")
-    assert any(e.type == "command" and "MOD" in e.name for e in result.entities)
-
-
-def test_del_command(normalizer):
-    result = normalizer.normalize("删除APN配置")
-    assert any(e.type == "command" and "DEL" in e.name for e in result.entities)
-
-
-def test_troubleshooting_intent(normalizer):
-    result = normalizer.normalize("CPU过载告警怎么排查")
-    assert result.intent == "troubleshooting"
-
-
-def test_concept_lookup_intent(normalizer):
-    result = normalizer.normalize("5G是什么")
-    assert result.intent == "concept_lookup"
-
-
-def test_build_plan_from_normalized(normalizer):
-    normalized = normalizer.normalize("UDG V100R023C10 ADD APN 怎么写")
-    plan = build_plan(normalized)
-    assert plan.intent == "command_usage"
-    assert any(c.type == "command" and c.name == "ADD APN" for c in plan.entity_constraints)
-    assert "UDG" in plan.scope_constraints.products
-    assert "V100R023C10" in plan.scope_constraints.product_versions
-    assert plan.conflict_policy == "flag_not_answer"
-    assert plan.expansion.use_ontology is False
-
-
-def test_build_plan_variant_policy_disambiguation(normalizer):
-    normalized = normalizer.normalize("ADD APN 怎么写")
-    plan = build_plan(normalized)
-    assert plan.variant_policy == "require_disambiguation"
-
-
-def test_desired_roles_for_command_usage(normalizer):
-    result = normalizer.normalize("ADD APN 怎么写")
-    assert "parameter" in result.desired_semantic_roles
-    assert "example" in result.desired_semantic_roles
-
-
-def test_desired_roles_for_troubleshooting(normalizer):
-    result = normalizer.normalize("CPU过载告警怎么排查")
-    assert "troubleshooting_step" in result.desired_semantic_roles
-
-
-def test_smf_is_network_element_not_product(normalizer):
-    result = normalizer.normalize("SMF 配置 S-NSSAI")
-    assert "SMF" in result.scope.network_elements
-    assert "SMF" not in result.scope.products
-
-
-def test_cloudcore_recognized_as_product(normalizer):
-    result = normalizer.normalize("CloudCore 5G 概念")
-    assert "CLOUDCORE" in result.scope.products
-
-
-def test_version_without_c_match(normalizer):
-    result = normalizer.normalize("UDG V100R023 ADD APN")
-    assert "V100R023" in result.scope.product_versions
+    def test_general_no_roles(self, normalizer):
+        result = normalizer.normalize("网络架构")
+        assert result.desired_roles == []
