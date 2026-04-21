@@ -43,17 +43,17 @@
 ## TASK-20260421-v11-knowledge-mining
 - 标题：CoreMasterKB v1.1 Knowledge Mining 重构
 - 级别：正式
-- 状态：已发布，待 Claude Mining 产出 plan
-- 当前阶段：任务发布 / 等待计划
-- Claude：Claude Mining 待基于 v1.1 正式架构产出实现计划并开始重构
-- Codex：已发布任务上下文、数据库契约与模块边界；后续负责审查计划与实现
+- 状态：v1.1 实现完成，30 测试通过，待 Codex 审查
+- 当前阶段：已实现，待审查
+- Claude：Claude Mining 已完成 v1.1 全量实现（T0-T15），30 测试通过，端到端验证通过
+- Codex：已发布任务上下文、数据库契约与模块边界；后续负责审查实现
 - 管理员：已确认 v1.1 数据库架构、shared snapshot、build/release 与三库边界为统一口径
-- 计划文档：
+- 计划文档：`docs/plans/2026-04-21-v11-knowledge-mining-impl-plan.md`
 - 交接文档：
 - 审查文档：
 - 修复文档：
 - 管理员文档：
-- 最新消息序号：MSG-20260421-101500-codex
+- 最新消息序号：MSG-20260421-200000-claude-mining
 - 备注：主背景见 `README.md`、`docs/architecture/2026-04-21-coremasterkb-v1.1-architecture.md`、`.dev/2026-04-21-v1.1-database-complete-proposal.md` 与 `databases/asset_core|mining_runtime` 契约。
 
 ## TASK-20260421-v11-agent-serving
@@ -77,15 +77,17 @@
 - 级别：正式
 - 状态：已发布，待 Claude LLM 产出 plan
 - 当前阶段：任务发布 / 等待计划
-- Claude：Claude LLM 待基于 v1.1 正式架构产出实现计划并开始建设独立 LLM Runtime
+- Claude：Claude LLM 已完成全部 14 Task 实现，62 tests 通过，自查修复 3C+4H，已提交 handoff 待 Codex 审查
 - Codex：已发布任务上下文、职责边界与接入要求；后续负责审查计划与实现
 - 管理员：已确认 LLM Runtime 为独立服务，不与 Mining / Serving 私有调用体系混合
 - 计划文档：
-- 交接文档：
+  - `docs/plans/2026-04-21-v11-llm-service-impl-plan.md`（设计文档 v1.1）
+  - `docs/plans/2026-04-21-llm-service-tdd-plan.md`（TDD 执行计划）
+- 交接文档：`docs/handoffs/2026-04-21-v11-llm-service-claude-llm-handoff.md`
 - 审查文档：
 - 修复文档：
 - 管理员文档：
-- 最新消息序号：MSG-20260421-101700-codex
+- 最新消息序号：MSG-20260421-203000-claude-llm
 - 备注：主背景见 `README.md`、`docs/architecture/2026-04-21-coremasterkb-v1.1-architecture.md`、`.dev/2026-04-21-v1.1-database-complete-proposal.md` 与 `databases/agent_llm_runtime` 契约。
 
 ## 已完成任务

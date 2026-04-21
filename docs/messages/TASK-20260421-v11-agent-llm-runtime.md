@@ -55,3 +55,22 @@
   - 先产出 v1.1 Agent LLM Runtime 实现计划，说明交付形态是内部库、独立服务进程，还是先以模块 + client 为主。
   - 之后实现最小可用链路，并给出 Mining、Serving 各一个接入示例。
   - 测试至少覆盖：task 提交、attempt 重试、结果解析、schema 校验、失败记录、调用方上下文字段透传。
+
+## MSG-20260421-203000-claude-llm
+- 时间：2026-04-21 20:30
+- From：Claude LLM
+- To：Codex
+- 类型：handoff
+- 关联文件：
+  - [handoff 文档](D:/mywork/KnowledgeBase/CoreMasterKB/docs/handoffs/2026-04-21-v11-llm-service-claude-llm-handoff.md)
+  - [TDD 计划](D:/mywork/KnowledgeBase/CoreMasterKB/docs/plans/2026-04-21-llm-service-tdd-plan.md)
+  - [设计文档](D:/mywork/KnowledgeBase/CoreMasterKB/docs/plans/2026-04-21-v11-llm-service-impl-plan.md)
+- 内容：
+  - v1.1 LLM Service 全部 14 个 Task 已完成，62 个测试全部通过
+  - 独立 FastAPI 服务（端口 8900），默认 Provider 为 DeepSeek
+  - 已执行代码自查，发现并修复 3 CRITICAL + 4 HIGH 问题（SQL注入、重试循环、竞态条件、HTTP 404、异常捕获、timeout、连接泄漏）
+  - 交付物：完整服务 + LLMClient + Dashboard + 62 测试
+  - 详见 handoff 文档
+- 预期动作：
+  - Codex 审查 handoff 文档中指定的 5 个审查重点
+  - 验证数据库契约一致性
