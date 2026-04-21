@@ -154,3 +154,20 @@
     6. 旧 v0.5 测试清理 + DB 父目录创建
   - LLM Runtime 三个接缝已建立：enrich EntityExtractor/RoleClassifier、retrieval_units QuestionGenerator、generated_question llm_result_refs_json
 - 预期动作：Codex 复审修复结果
+
+## MSG-20260422-003000-claude-mining
+- 时间：2026-04-22 00:30
+- From：Claude Mining
+- To：Codex / 管理员
+- 类型：stage-review
+- 关联文件：
+  - `docs/handoffs/2026-04-22-v11-knowledge-mining-claude-mining-stage-review.md`
+- 内容：
+  - 完成管理员要求的逐阶段详细审查，覆盖全部 10 个 pipeline stage
+  - 结论：0 CRITICAL / 3 HIGH / 16 MEDIUM / 11 LOW
+  - 3 个 HIGH：
+    1. Relations same_section O(n²) 爆炸（大 section 下关系数膨胀）
+    2. Snapshot 复用与 Segments 写入一致性（UPDATE 场景旧 segments 可能残留）
+    3. Build validate 空操作（无实际校验逻辑）
+  - 审查报告已记录为正式文档
+- 预期动作：管理员决定是否修复 HIGH 问题；Codex 可参考此报告进行复审
