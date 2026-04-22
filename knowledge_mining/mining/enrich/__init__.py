@@ -37,6 +37,7 @@ _SCHEMA_SEMANTIC_ROLES = frozenset({
 class Enricher(Protocol):
     """Protocol for the enrich stage. v1.2 LLM implementation replaces this."""
     def enrich(self, segments: list[RawSegmentData], **kwargs: Any) -> list[RawSegmentData]: ...
+    def enrich_batch(self, segments: list[RawSegmentData], **kwargs: Any) -> list[RawSegmentData]: ...
 
 
 class RuleBasedEnricher:
@@ -64,6 +65,14 @@ class RuleBasedEnricher:
         for seg in segments:
             result.append(_enrich_one(seg, self._extractor, self._classifier))
         return result
+
+    def enrich_batch(
+        self,
+        segments: list[RawSegmentData],
+        **kwargs: Any,
+    ) -> list[RawSegmentData]:
+        """Batch enrichment. Default: delegates to enrich (v1.2 LLM can override)."""
+        return self.enrich(segments, **kwargs)
 
 
 def enrich_segments(

@@ -1,8 +1,17 @@
-"""Text tokenization, normalization, and similarity utilities for v1.1 Mining."""
+"""Text tokenization, normalization, and similarity utilities for v1.2 Mining."""
 from __future__ import annotations
 
 import re
 import unicodedata
+
+
+def tokenize_for_search(text: str) -> str:
+    """Tokenize text for FTS5 search. Uses jieba for CJK if available."""
+    try:
+        import jieba
+        return " ".join(jieba.cut(text))
+    except ImportError:
+        return text
 
 
 def _tokenize(text: str) -> list[str]:

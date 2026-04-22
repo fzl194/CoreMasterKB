@@ -307,6 +307,13 @@ class AssetCoreDB(_DB):
             (document_snapshot_id,),
         )
 
+    def count_segments_by_snapshot(self, document_snapshot_id: str) -> int:
+        row = self._fetchone(
+            "SELECT COUNT(*) as cnt FROM asset_raw_segments WHERE document_snapshot_id = ?",
+            (document_snapshot_id,),
+        )
+        return row["cnt"] if row else 0
+
     # -- segment relations --
 
     def insert_segment_relation(
@@ -365,6 +372,7 @@ class AssetCoreDB(_DB):
         entity_refs_json: list | None = None,
         source_refs_json: dict | None = None,
         llm_result_refs_json: dict | None = None,
+        source_segment_id: str | None = None,
         weight: float = 1.0,
         metadata_json: dict | None = None,
     ) -> str:
@@ -374,14 +382,14 @@ class AssetCoreDB(_DB):
                    (id, document_snapshot_id, unit_key, unit_type, target_type, target_ref_json,
                     title, text, search_text, block_type, semantic_role,
                     facets_json, entity_refs_json, source_refs_json, llm_result_refs_json,
-                    weight, created_at, metadata_json)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    source_segment_id, weight, created_at, metadata_json)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 unit_id, document_snapshot_id, unit_key, unit_type, target_type,
                 _json_dumps(target_ref_json), title, text, search_text, block_type, semantic_role,
                 _json_dumps(facets_json), _json_dumps(entity_refs_json),
                 _json_dumps(source_refs_json), _json_dumps(llm_result_refs_json),
-                weight, now, _json_dumps(metadata_json),
+                source_segment_id, weight, now, _json_dumps(metadata_json),
             ),
         )
         return unit_id

@@ -1,14 +1,16 @@
-"""Retrieval units stage: build retrieval-ready units from segments for v1.1.
+"""Retrieval units stage: build retrieval-ready units from segments.
 
-v1.1 produces:
-- raw_text: one-to-one from each segment
+v1.2 produces:
+- raw_text: one-to-one from each segment (source_segment_id bridge)
 - contextual_text: segment with section heading context prepended
-- entity_card: one per unique entity from entity_refs (deduped across segments)
-- generated_question: placeholder for LLM-generated questions (v1.1: empty when no LLM Runtime)
+- entity_card: enriched with entity context from raw_text
+- generated_question: LLM-generated via LlmQuestionGenerator
 
-v1.2 will add:
-- LLM-backed generated_question via LlmQuestionGenerator protocol
-- summary (LLM-generated)
+v1.2 changes:
+- source_segment_id strong bridge to raw_segment
+- jieba pre-tokenization for search_text (FTS5 Chinese support)
+- entity_card content enrichment with surrounding context
+- LlmQuestionGenerator backed by llm_service
 """
 from __future__ import annotations
 
@@ -16,34 +18,74 @@ import uuid
 from typing import Any, Protocol, runtime_checkable
 
 from knowledge_mining.mining.models import RawSegmentData, RetrievalUnitData
+from knowledge_mining.mining.text_utils import tokenize_for_search
 
 
 @runtime_checkable
 class QuestionGenerator(Protocol):
-    """Protocol for generating retrieval questions from segments.
+    """Protocol for generating retrieval questions from segments."""
 
-    v1.1: NoOpQuestionGenerator returns empty (LLM Runtime not yet integrated).
-    v1.2: LlmQuestionGenerator calls LLM Runtime to generate questions.
-    """
     def generate(self, segment: RawSegmentData) -> list[str]:
         """Return list of generated questions for the segment."""
         ...
 
 
 class NoOpQuestionGenerator:
-    """v1.1 default: no questions generated (LLM Runtime not yet integrated)."""
+    """Default: no questions generated (LLM not connected)."""
 
     def generate(self, segment: RawSegmentData) -> list[str]:
         return []
 
 
+class LlmQuestionGenerator:
+    """v1.2: LLM-backed question generation via llm_service HTTP API.
+
+    Uses submit+poll pattern. Failures return empty list (non-blocking).
+    """
+
+    def __init__(self, base_url: str = "http://localhost:8000", timeout: int = 30) -> None:
+        from knowledge_mining.mining.llm_client import LlmClient
+        self._client = LlmClient(base_url=base_url)
+        self._timeout = timeout
+
+    def generate(self, segment: RawSegmentData) -> list[str]:
+        try:
+            task_id = self._client.submit_task(
+                template_key="mining-question-gen",
+                variables={
+                    "title": segment.section_title or "",
+                    "content": segment.raw_text,
+                },
+                caller_domain="mining",
+                pipeline_stage="retrieval_units",
+            )
+            if task_id is None:
+                return []
+            result_text = self._client.poll_result(task_id, timeout=self._timeout)
+            if result_text is None:
+                return []
+            import json
+            items = json.loads(result_text)
+            return [item["question"] for item in items if "question" in item]
+        except Exception:
+            return []
+
+
 def build_retrieval_units(
     segments: list[RawSegmentData],
     *,
+    seg_ids: dict[str, str] | None = None,
     document_key: str = "",
     question_generator: QuestionGenerator | None = None,
 ) -> list[RetrievalUnitData]:
-    """Build retrieval units from segments."""
+    """Build retrieval units from segments.
+
+    Args:
+        segments: Enriched segments to build units from.
+        seg_ids: Map of segment_key -> segment UUID (from build_relations).
+        document_key: Document key for unit naming.
+        question_generator: Optional question generator (LLM-backed or NoOp).
+    """
     if not segments:
         return []
 
@@ -52,30 +94,35 @@ def build_retrieval_units(
     seen_entity_cards: set[str] = set()
 
     for seg in segments:
+        seg_key = f"{seg.document_key}#{seg.segment_index}"
+        source_seg_id = (seg_ids or {}).get(seg_key)
+
         # 1. raw_text unit (1:1 with segment)
-        units.append(_make_raw_text_unit(seg))
+        units.append(_make_raw_text_unit(seg, source_seg_id))
 
         # 2. contextual_text unit (segment + section context)
-        ctx_unit = _make_contextual_text_unit(seg)
+        ctx_unit = _make_contextual_text_unit(seg, source_seg_id)
         if ctx_unit is not None:
             units.append(ctx_unit)
 
-        # 3. entity_card units (deduped)
+        # 3. entity_card units (deduped, enriched)
         for ref in seg.entity_refs_json:
             entity_key = f"{ref.get('type', '')}:{ref.get('name', '')}"
             if entity_key not in seen_entity_cards:
                 seen_entity_cards.add(entity_key)
-                units.append(_make_entity_card_unit(seg, ref))
+                units.append(_make_entity_card_unit(seg, ref, source_seg_id))
 
-        # 4. generated_question units (v1.1: empty unless LLM Runtime provided)
+        # 4. generated_question units
         questions = qgen.generate(seg)
         for qi, question in enumerate(questions):
-            units.append(_make_generated_question_unit(seg, question, qi))
+            units.append(_make_generated_question_unit(seg, question, qi, source_seg_id))
 
     return units
 
 
-def _make_raw_text_unit(seg: RawSegmentData) -> RetrievalUnitData:
+def _make_raw_text_unit(
+    seg: RawSegmentData, source_seg_id: str | None = None,
+) -> RetrievalUnitData:
     """One-to-one raw_text retrieval unit from segment."""
     return RetrievalUnitData(
         segment_key=f"{seg.document_key}#{seg.segment_index}",
@@ -88,18 +135,21 @@ def _make_raw_text_unit(seg: RawSegmentData) -> RetrievalUnitData:
         },
         title=seg.section_title,
         text=seg.raw_text,
-        search_text=seg.raw_text,
+        search_text=tokenize_for_search(seg.raw_text),
         block_type=seg.block_type,
         semantic_role=seg.semantic_role,
         facets_json=_build_facets(seg),
         entity_refs_json=list(seg.entity_refs_json),
         source_refs_json=_build_source_refs(seg),
+        source_segment_id=source_seg_id,
         weight=1.0,
         metadata_json={"segment_index": seg.segment_index},
     )
 
 
-def _make_contextual_text_unit(seg: RawSegmentData) -> RetrievalUnitData | None:
+def _make_contextual_text_unit(
+    seg: RawSegmentData, source_seg_id: str | None = None,
+) -> RetrievalUnitData | None:
     """Contextual text: raw_text with section path prepended."""
     if not seg.section_path or seg.block_type == "heading":
         return None
@@ -122,12 +172,13 @@ def _make_contextual_text_unit(seg: RawSegmentData) -> RetrievalUnitData | None:
         },
         title=seg.section_title,
         text=contextual_text,
-        search_text=contextual_text,
+        search_text=tokenize_for_search(contextual_text),
         block_type=seg.block_type,
         semantic_role=seg.semantic_role,
         facets_json=_build_facets(seg),
         entity_refs_json=list(seg.entity_refs_json),
         source_refs_json=_build_source_refs(seg),
+        source_segment_id=source_seg_id,
         weight=0.9,
         metadata_json={
             "section_titles": section_titles,
@@ -136,16 +187,36 @@ def _make_contextual_text_unit(seg: RawSegmentData) -> RetrievalUnitData | None:
     )
 
 
+def _extract_entity_context(name: str, raw_text: str, window: int = 80) -> str:
+    """Extract text around entity mention for context."""
+    idx = raw_text.find(name)
+    if idx < 0:
+        return ""
+    start = max(0, idx - window // 2)
+    end = min(len(raw_text), idx + len(name) + window // 2)
+    ctx = raw_text[start:end].strip()
+    if start > 0:
+        ctx = "..." + ctx
+    if end < len(raw_text):
+        ctx = ctx + "..."
+    return ctx
+
+
 def _make_entity_card_unit(
     seg: RawSegmentData,
     ref: dict[str, str],
+    source_seg_id: str | None = None,
 ) -> RetrievalUnitData:
-    """Entity card: one per unique entity reference."""
+    """Entity card: enriched with entity context from surrounding text."""
     entity_type = ref.get("type", "unknown")
     entity_name = ref.get("name", "unknown")
 
-    text = f"{entity_name} ({entity_type})"
-    if seg.section_title:
+    # v1.2: extract context from raw text
+    description = _extract_entity_context(entity_name, seg.raw_text)
+    text = f"{entity_name}（{entity_type}）"
+    if description:
+        text += f" {description}"
+    elif seg.section_title:
         text += f" — 见 {seg.section_title}"
 
     return RetrievalUnitData(
@@ -156,12 +227,13 @@ def _make_entity_card_unit(
         target_ref_json={"entity_type": entity_type, "entity_name": entity_name},
         title=entity_name,
         text=text,
-        search_text=f"{entity_name} {entity_type}",
+        search_text=tokenize_for_search(f"{entity_name} {entity_type} {description}"),
         block_type=seg.block_type,
         semantic_role=seg.semantic_role,
         facets_json={"entity_type": entity_type},
         entity_refs_json=[ref],
         source_refs_json=_build_source_refs(seg),
+        source_segment_id=source_seg_id,
         weight=0.5,
         metadata_json={"first_seen_in": seg.document_key},
     )
@@ -171,6 +243,7 @@ def _make_generated_question_unit(
     seg: RawSegmentData,
     question: str,
     question_index: int,
+    source_seg_id: str | None = None,
 ) -> RetrievalUnitData:
     """Generated question unit: one per LLM-generated question."""
     return RetrievalUnitData(
@@ -185,13 +258,14 @@ def _make_generated_question_unit(
         },
         title=question[:80],
         text=question,
-        search_text=question,
+        search_text=tokenize_for_search(question),
         block_type=seg.block_type,
         semantic_role=seg.semantic_role,
         facets_json=_build_facets(seg),
         entity_refs_json=list(seg.entity_refs_json),
         source_refs_json=_build_source_refs(seg),
         llm_result_refs_json={"source": "llm_runtime", "question_index": question_index},
+        source_segment_id=source_seg_id,
         weight=0.7,
         metadata_json={"question_index": question_index},
     )

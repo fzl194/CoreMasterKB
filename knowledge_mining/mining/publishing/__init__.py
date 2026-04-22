@@ -140,8 +140,23 @@ def assemble_build(
         )
 
     # Validate and mark as validated
+    validate_build(asset_db, build_id)
     asset_db.update_build_status(build_id, "validated")
     return build_id
+
+
+def validate_build(asset_db: AssetCoreDB, build_id: str) -> None:
+    """Validate that a build has at least one active snapshot with segments."""
+    snapshots = asset_db.get_build_snapshots(build_id)
+    active = [s for s in snapshots if s["selection_status"] == "active"]
+    if not active:
+        raise ValueError(f"Build {build_id} has no active snapshots")
+    for snap in active:
+        count = asset_db.count_segments_by_snapshot(snap["document_snapshot_id"])
+        if count == 0:
+            raise ValueError(
+                f"Snapshot {snap['document_snapshot_id']} has no segments"
+            )
 
 
 def publish_release(

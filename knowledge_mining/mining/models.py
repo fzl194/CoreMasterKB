@@ -284,6 +284,7 @@ class RetrievalUnitData:
     entity_refs_json: list[dict[str, str]] = field(default_factory=list)
     source_refs_json: dict[str, Any] = field(default_factory=dict)
     llm_result_refs_json: dict[str, Any] = field(default_factory=dict)
+    source_segment_id: str | None = None
     weight: float = 1.0
     metadata_json: dict[str, Any] = field(default_factory=dict)
 

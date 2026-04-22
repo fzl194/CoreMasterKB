@@ -396,6 +396,16 @@ class TestPublishing:
         from knowledge_mining.mining.publishing import assemble_build, publish_release
         asset_db.upsert_document("d1", "doc:/a.md", "a.md")
         asset_db.upsert_snapshot("s1", "nh1", "rh1", "text/markdown")
+        # v1.2: validate_build requires at least one segment per snapshot
+        asset_db.insert_raw_segment(
+            segment_id="seg-1", document_snapshot_id="s1",
+            segment_key="doc:/a.md#0", segment_index=0,
+            block_type="paragraph", semantic_role="concept",
+            section_path=[], section_title="T",
+            raw_text="test", normalized_text="test",
+            content_hash="ch", normalized_hash="nh",
+        )
+        asset_db.commit()
 
         build_id = assemble_build(asset_db, run_id="r1", snapshot_decisions=[
             {"document_id": "d1", "document_snapshot_id": "s1", "reason": "add", "selection_status": "active"},

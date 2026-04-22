@@ -235,6 +235,7 @@ CREATE TABLE IF NOT EXISTS asset_retrieval_units (
     entity_refs_json     TEXT NOT NULL DEFAULT '[]',
     source_refs_json     TEXT NOT NULL DEFAULT '{}',
     llm_result_refs_json TEXT NOT NULL DEFAULT '{}',
+    source_segment_id    TEXT REFERENCES asset_raw_segments(id) ON DELETE SET NULL,
     weight               REAL NOT NULL DEFAULT 1.0,
     created_at           TEXT NOT NULL,
     metadata_json        TEXT NOT NULL DEFAULT '{}',
@@ -249,6 +250,9 @@ CREATE INDEX IF NOT EXISTS idx_asset_retrieval_units_unit_type
 
 CREATE INDEX IF NOT EXISTS idx_asset_retrieval_units_block_role
     ON asset_retrieval_units(block_type, semantic_role);
+
+CREATE INDEX IF NOT EXISTS idx_asset_retrieval_units_source_segment
+    ON asset_retrieval_units(source_segment_id);
 
 CREATE VIRTUAL TABLE IF NOT EXISTS asset_retrieval_units_fts
 USING fts5(

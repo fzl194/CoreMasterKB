@@ -20,8 +20,14 @@ def build_relations(
     segments: list[RawSegmentData],
     *,
     document_snapshot_id: str = "",
+    max_distance: int = 5,
 ) -> tuple[list[SegmentRelationData], dict[str, str]]:
     """Build structural relations from ordered segments.
+
+    Args:
+        segments: Ordered list of segments.
+        document_snapshot_id: Snapshot ID for relation context.
+        max_distance: Maximum index distance for same_section relations (default 5).
 
     Returns (relations, segment_key_to_id_map) where the map is
     segment_key -> generated segment_id (for downstream DB writes).
@@ -77,10 +83,10 @@ def build_relations(
             distance=1,
         ))
 
-    # 2. same_section relations
+    # 2. same_section relations (v1.2: capped by max_distance to avoid O(n^2))
     for path_key, seg_keys in sections.items():
         for i in range(len(seg_keys)):
-            for j in range(i + 1, len(seg_keys)):
+            for j in range(i + 1, min(i + max_distance + 1, len(seg_keys))):
                 relations.append(SegmentRelationData(
                     source_segment_key=seg_keys[i],
                     target_segment_key=seg_keys[j],

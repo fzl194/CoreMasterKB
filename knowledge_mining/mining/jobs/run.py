@@ -275,9 +275,11 @@ def _run_pipeline(
             tracker.end_stage(evt, run_id, "build_relations", output_summary=f"{len(relations)} relations")
             runtime_db.commit()
 
-            # Stage 5: Build retrieval units
+            # Stage 5: Build retrieval units (v1.2: pass seg_ids for source_segment_id bridge)
             evt = tracker.start_stage(run_id, "build_retrieval_units", rd_id)
-            retrieval_units = build_retrieval_units(segments, document_key=doc_key)
+            retrieval_units = build_retrieval_units(
+                segments, seg_ids=seg_id_map, document_key=doc_key,
+            )
             tracker.end_stage(evt, run_id, "build_retrieval_units", output_summary=f"{len(retrieval_units)} units")
             runtime_db.commit()
 
@@ -288,6 +290,21 @@ def _run_pipeline(
             )
             tracker.end_stage(evt, run_id, "select_snapshot")
             asset_db.commit()
+
+            # v1.2 UPDATE cleanup: remove old snapshot data before writing new
+            if action == "UPDATE" and existing_doc is not None:
+                old_links = asset_db._fetchall(
+                    "SELECT document_snapshot_id FROM asset_document_snapshot_links "
+                    "WHERE document_id = ? ORDER BY created_at DESC",
+                    (existing_doc["id"],),
+                )
+                # Skip the latest (just created), clean up older ones
+                for old_link in old_links[1:] if len(old_links) > 1 else []:
+                    old_snap_id = old_link["document_snapshot_id"]
+                    asset_db.delete_retrieval_units_by_snapshot(old_snap_id)
+                    asset_db.delete_relations_by_snapshot(old_snap_id)
+                    asset_db.delete_segments_by_snapshot(old_snap_id)
+                asset_db.commit()
 
             # Write segments to DB
             for seg in segments:
@@ -348,6 +365,7 @@ def _run_pipeline(
                     entity_refs_json=ru.entity_refs_json,
                     source_refs_json=ru.source_refs_json,
                     llm_result_refs_json=ru.llm_result_refs_json,
+                    source_segment_id=ru.source_segment_id,
                     weight=ru.weight,
                     metadata_json=ru.metadata_json,
                 )
