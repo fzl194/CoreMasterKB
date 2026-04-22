@@ -1,9 +1,36 @@
 from __future__ import annotations
 
+import json
+
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 router = APIRouter(prefix="/api/v1/templates")
+
+
+def _parse_json(value: str | None, default=None):
+    if not value:
+        return default
+    try:
+        return json.loads(value)
+    except (json.JSONDecodeError, TypeError):
+        return default
+
+
+def _map_template_row(row) -> dict:
+    """Map template DB row to stable response."""
+    return {
+        "id": row["id"],
+        "template_key": row["template_key"],
+        "template_version": row["template_version"],
+        "purpose": row["purpose"],
+        "system_prompt": row["system_prompt"],
+        "user_prompt_template": row["user_prompt_template"],
+        "expected_output_type": row["expected_output_type"],
+        "output_schema": _parse_json(row["output_schema_json"], {}),
+        "status": row["status"],
+        "created_at": row["created_at"],
+    }
 
 
 class TemplateCreateRequest(BaseModel):
@@ -40,13 +67,14 @@ async def create_template(body: TemplateCreateRequest, request: Request):
         output_schema_json=body.output_schema_json,
         status=body.status,
     )
-    return await svc._templates.get(tpl_id)
+    tpl = await svc._templates.get(tpl_id)
+    return _map_template_row(tpl) if tpl else None
 
 
 @router.get("")
 async def list_templates(request: Request):
     svc = request.app.state.llm_service
-    return await svc._templates.list_all()
+    return [_map_template_row(r) for r in await svc._templates.list_all()]
 
 
 @router.get("/{template_key}")
@@ -55,7 +83,7 @@ async def get_template(template_key: str, request: Request):
     tpl = await svc._templates.get_by_key(template_key)
     if not tpl:
         raise HTTPException(status_code=404, detail="template not found")
-    return tpl
+    return _map_template_row(tpl)
 
 
 @router.put("/{tpl_id}")
@@ -67,7 +95,8 @@ async def update_template(tpl_id: str, body: TemplateUpdateRequest, request: Req
     updates = {k: v for k, v in body.model_dump().items() if v is not None}
     if updates:
         await svc._templates.update(tpl_id, **updates)
-    return await svc._templates.get(tpl_id)
+    tpl = await svc._templates.get(tpl_id)
+    return _map_template_row(tpl) if tpl else None
 
 
 @router.delete("/{tpl_id}")

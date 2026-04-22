@@ -307,7 +307,7 @@ class LLMService:
         row = await cur.fetchone()
         if not row:
             return None
-        return dict(row)
+        return _map_task_row(row)
 
     async def cancel(self, task_id: str) -> None:
         await self._mgr.cancel(task_id)
@@ -315,12 +315,87 @@ class LLMService:
     async def get_result(self, task_id: str) -> dict | None:
         cur = await self._db.execute("SELECT * FROM agent_llm_results WHERE task_id = ?", (task_id,))
         row = await cur.fetchone()
-        return dict(row) if row else None
+        return _map_result_row(row) if row else None
 
     async def get_attempts(self, task_id: str) -> list[dict]:
         cur = await self._db.execute("SELECT * FROM agent_llm_attempts WHERE task_id = ? ORDER BY attempt_no", (task_id,))
-        return [dict(r) for r in await cur.fetchall()]
+        return [_map_attempt_row(r) for r in await cur.fetchall()]
 
     async def get_events(self, task_id: str) -> list[dict]:
         cur = await self._db.execute("SELECT * FROM agent_llm_events WHERE task_id = ? ORDER BY created_at", (task_id,))
-        return [dict(r) for r in await cur.fetchall()]
+        return [_map_event_row(r) for r in await cur.fetchall()]
+
+
+# ------------------------------------------------------------------
+# Stable response mapping — shields callers from DB column changes
+# ------------------------------------------------------------------
+
+def _parse_json(value: str | None, default=None):
+    if not value:
+        return default
+    try:
+        return json.loads(value)
+    except (json.JSONDecodeError, TypeError):
+        return default
+
+
+def _map_task_row(row) -> dict:
+    """Map agent_llm_tasks row to stable response dict."""
+    return {
+        "id": row["id"],
+        "caller_domain": row["caller_domain"],
+        "pipeline_stage": row["pipeline_stage"],
+        "status": row["status"],
+        "idempotency_key": row["idempotency_key"],
+        "priority": row["priority"],
+        "attempt_count": row["attempt_count"],
+        "max_attempts": row["max_attempts"],
+        "metadata": _parse_json(row["metadata_json"], {}),
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+        "started_at": row["started_at"],
+        "finished_at": row["finished_at"],
+    }
+
+
+def _map_result_row(row) -> dict:
+    """Map agent_llm_results row to stable response dict."""
+    return {
+        "id": row["id"],
+        "task_id": row["task_id"],
+        "parse_status": row["parse_status"],
+        "parsed_output": _parse_json(row["parsed_output_json"]) or None,
+        "text_output": row["text_output"],
+        "parse_error": row["parse_error"],
+        "validation_errors": _parse_json(row["validation_errors_json"], []),
+        "created_at": row["created_at"],
+    }
+
+
+def _map_attempt_row(row) -> dict:
+    """Map agent_llm_attempts row to stable response dict."""
+    return {
+        "id": row["id"],
+        "task_id": row["task_id"],
+        "attempt_no": row["attempt_no"],
+        "status": row["status"],
+        "error_type": row["error_type"],
+        "error_message": row["error_message"],
+        "prompt_tokens": row["prompt_tokens"],
+        "completion_tokens": row["completion_tokens"],
+        "total_tokens": row["total_tokens"],
+        "latency_ms": row["latency_ms"],
+        "started_at": row["started_at"],
+        "finished_at": row["finished_at"],
+    }
+
+
+def _map_event_row(row) -> dict:
+    """Map agent_llm_events row to stable response dict."""
+    return {
+        "id": row["id"],
+        "task_id": row["task_id"],
+        "event_type": row["event_type"],
+        "message": row["message"],
+        "created_at": row["created_at"],
+    }
