@@ -117,9 +117,9 @@ class LLMPlannerProvider:
             template_key="serving-planner",
             input={
                 "intent": normalized.intent,
-                "entities": [e.model_dump() for e in normalized.entities],
-                "scope": normalized.scope,
-                "keywords": normalized.keywords,
+                "entities": json.dumps([e.model_dump() for e in normalized.entities], ensure_ascii=False),
+                "scope": json.dumps(normalized.scope, ensure_ascii=False),
+                "keywords": ", ".join(normalized.keywords),
             },
             expected_output_type="json_object",
         )
@@ -130,9 +130,9 @@ class LLMPlannerProvider:
 
         budget_data = parsed.get("budget", {})
         budget = RetrievalBudget(
-            max_items=budget_data.get("max_items", 10),
-            recall_multiplier=budget_data.get("recall_multiplier", 3),
-            max_expanded=budget_data.get("max_expanded", 5),
+            max_items=int(budget_data.get("max_items", 10)),
+            recall_multiplier=int(budget_data.get("recall_multiplier", 3)),
+            max_expanded=int(budget_data.get("max_expanded", 5)),
         )
 
         return QueryPlan(
