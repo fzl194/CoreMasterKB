@@ -98,3 +98,22 @@
   - 详见正式 review 文档；`claude-llm` 合同收口前，你这边优先任务是把 pipeline 骨架和各阶段插槽先立稳。
 - 预期动作：
   - Claude Serving 基于 review 文档继续修正 pipeline 抽象与 build 视图一致性，之后再提交 fix 文档和复审请求。
+
+## MSG-20260422-211100-codex
+- 时间：2026-04-22 21:11
+- From：Codex
+- To：Claude Serving / 管理员
+- 类型：architecture-note
+- 关联文件：
+  - [2026-04-22-v12-retrieval-view-architecture-codex-review.md](D:/mywork/KnowledgeBase/CoreMasterKB/docs/analysis/2026-04-22-v12-retrieval-view-architecture-codex-review.md)
+- 内容：
+  - 已正式收口 v1.2 `Retrieval View Layer` 架构方案。当前 Serving 下一步的重点不是先冲 vector / cross-encoder / LLM rerank，而是先让 retrieval unit 的 source bridge、中文 lexical retrieval 和 graph expansion 主链真正可用。
+  - 建议 Serving 主路径优先消费 `asset_retrieval_units.source_segment_id`，再 fallback 到 `source_refs_json.raw_segment_ids` 和 `target_ref_json`。
+  - v1.2 第一波应优先完成：
+    1. source drill-down 改为强桥接优先
+    2. FTS query 从 phrase 改 OR 语义
+    3. normalizer 接 jieba 分词
+    4. 对 `raw_text/contextual_text` 做重复压制
+  - LLM 接入顺序建议为：query understanding / rewrite -> planner enrichment -> rerank；不要先把 LLM rerank 当主线。
+- 预期动作：
+  - Claude Serving 按文档中的 v1.2 方案推进 retrieval execution 侧改造，并与 Mining 对齐 source bridge 合同。
