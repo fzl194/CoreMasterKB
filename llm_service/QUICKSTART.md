@@ -106,6 +106,7 @@ LLM_SERVICE_PROVIDER_MODEL=qwen2.5:7b
 | `LLM_SERVICE_DEFAULT_MAX_ATTEMPTS` | 3 | 最大重试次数 |
 | `LLM_SERVICE_EXECUTE_TIMEOUT` | 60 | 同步执行超时秒数 |
 | `LLM_SERVICE_PROVIDER_TIMEOUT` | 30 | Provider 请求超时秒数 |
+| `LLM_SERVICE_PROVIDER_BYPASS_PROXY` | false | 绕过系统代理（内网机器设 true） |
 
 ## 3. 启动服务
 
@@ -191,8 +192,7 @@ curl -X POST http://localhost:8900/api/v1/execute \
     "caller_domain": "serving",
     "pipeline_stage": "normalizer",
     "template_key": "my-summary",
-    "input": {"text": "Python是一种通用编程语言，支持面向对象和函数式编程。"},
-    "request_id": "test-001"
+    "input": {"text": "Python是一种通用编程语言，支持面向对象和函数式编程。"}
   }'
 ```
 
@@ -243,9 +243,7 @@ curl -X POST http://localhost:8900/api/v1/tasks \
     "pipeline_stage": "retrieval_units",
     "template_key": "my-qa",
     "input": {"content": "FastAPI是一个现代Python Web框架。"},
-    "ref_type": "section",
-    "ref_id": "sec-001",
-    "request_id": "batch-001"
+    "metadata": {"caller_context": {"ref_type": "section", "ref_id": "sec-001"}}
   }'
 ```
 
@@ -276,8 +274,7 @@ for i in 1 2 3; do
       \"pipeline_stage\": \"retrieval_units\",
       \"template_key\": \"my-qa\",
       \"input\": {\"content\": \"第${i}段内容\"},
-      \"ref_type\": \"section\",
-      \"ref_id\": \"sec-00${i}\"
+      \"metadata\": {\"caller_context\": {\"ref_type\": \"section\", \"ref_id\": \"sec-00${i}\"}}
     }" | python -m json.tool
   echo "---"
 done

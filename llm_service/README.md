@@ -65,7 +65,7 @@ from llm_service.client import LLMClient
 client = LLMClient(base_url="http://localhost:8900")
 
 result = await client.execute(
-    caller_domain="mining",          # 谁在调用：mining / serving / evaluation / admin
+    caller_domain="mining",           # 谁在调用：mining / serving / ...
     pipeline_stage="section_summary", # 调用方的业务阶段名
     messages=[{"role": "user", "content": "请总结以下内容：..."}],
     expected_output_type="json_object", # 返回类型：json_object / json_array / text
@@ -125,10 +125,13 @@ summary_result = await llm.execute(
     messages=[{"role": "user", "content": f"总结：{section_text}"}],
     expected_output_type="json_object",
     output_schema={"type": "object", "required": ["title", "summary"]},
-    build_id=build_id,       # 关联 build
-    release_id=release_id,   # 关联 release
-    ref_type="segment",      # 关联业务对象类型
-    ref_id=segment_id,       # 关联业务对象 ID
+    metadata={
+        "caller_context": {
+            "build_id": build_id,
+            "release_id": release_id,
+            "ref": {"type": "segment", "id": segment_id},
+        }
+    },
 )
 summary = summary_result["result"]["parsed_output"]
 
@@ -205,6 +208,7 @@ intent_result = await llm.execute(
 | `LLM_SERVICE_PROVIDER_BASE_URL` | `https://api.deepseek.com` | LLM API 地址 |
 | `LLM_SERVICE_PROVIDER_API_KEY` | | API Key |
 | `LLM_SERVICE_PROVIDER_MODEL` | `deepseek-chat` | 模型名 |
+| `LLM_SERVICE_PROVIDER_BYPASS_PROXY` | `false` | 绕过系统代理（内网机器设 true） |
 | `LLM_SERVICE_DEFAULT_MAX_ATTEMPTS` | `3` | 最大重试次数 |
 | `LLM_SERVICE_LEASE_DURATION` | `300` | Worker 租约（秒） |
 | `LLM_SERVICE_EXECUTE_TIMEOUT` | `60` | 同步执行超时（秒） |
@@ -252,5 +256,5 @@ queued → running → succeeded
 
 ```bash
 pytest llm_service/tests/ -v
-# 62 tests
+# 79 tests
 ```
