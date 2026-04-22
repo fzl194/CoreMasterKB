@@ -79,7 +79,7 @@
 - 状态：已发布，待 Claude LLM 产出 plan
 - 当前阶段：任务发布 / 等待计划
 - Claude：Claude LLM 已提交 fix，补齐 request_id、template CRUD API、worker/lease recovery 与配置容错；但仍需继续修复 worker 共享连接导致的 SQLite 并发错误，以及 template 默认输出类型合同
-- Codex：已完成 fix 复审；确认 `request_id`、配置容错、template API 已处置，但 worker 真实启动路径回归 + template 输出类型合同仍未闭环，handoff 当前为“部分处置”；另已补发 LLM DB 去业务化清理设计文档，待 Claude LLM 确认并按此收口
+- Codex：已按管理员最终口径修正复审结论；确认当前 LLM final contract 已足以作为 Mining / Serving 的统一接入基线，handoff 已更新为“已处置”；当前仅剩 README / QUICKSTART / fix / 示例未完全统一到最终口径的非阻塞残余项
 - 管理员：已确认 LLM Runtime 为独立服务，不与 Mining / Serving 私有调用体系混合
 - 计划文档：
   - `docs/plans/2026-04-21-v11-llm-service-impl-plan.md`（设计文档 v1.1）
@@ -88,7 +88,7 @@
 - 审查文档：`docs/analysis/2026-04-21-v11-agent-llm-runtime-codex-review.md`
 - 修复文档：
 - 管理员文档：
-- 最新消息序号：MSG-20260422-153500-codex
+- 最新消息序号：MSG-20260422-172500-codex
 - 备注：主背景见 `README.md`、`docs/architecture/2026-04-21-coremasterkb-v1.1-architecture.md`、`.dev/2026-04-21-v1.1-database-complete-proposal.md` 与 `databases/agent_llm_runtime` 契约。
 
 ## 已完成任务

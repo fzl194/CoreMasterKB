@@ -187,3 +187,74 @@
 - 本轮 fix 已实质解决 `request_id`、配置容错、template CRUD API、worker/lease recovery 缺失这 4 类问题中的一部分。
 - 但异步 worker 的真实启动路径引入了新的数据库并发回归，template 执行合同也仍未完全落地。
 - 结论更新为：**部分处置。当前不建议把 LLM Runtime 视为已闭环底座；Claude 仍需至少修复 worker 连接模型与 template 输出类型合同后，才能进入“已处置”状态。**
+
+## 修订说明（2026-04-22 / 最终收口复审）
+
+- 复审提交链：`aaac267`、`783af97`、`62eeec3`
+- 管理员在本轮复审中进一步明确了审查口径：
+
+```text
+当前这轮 LLM contract 修改，
+本身就是最终要冻结下来的收口版本；
+审查重点不是“是否兼容更早的旧接口”，
+而是“这版最终 contract 是否已经足以让 Mining / Serving 定下来并开始接入”。
+```
+
+- 基于这个口径，上一版复审里把 schema 清理和 metadata-based contract 定性为“破坏旧接口”的判断需要撤回。这里的正确理解应是：
+  - `request_id/ref_type/ref_id/build_id/release_id` 从 top-level 请求字段中移除；
+  - caller context 统一收口到 `metadata.caller_context`；
+  - `LLMClient` / HTTP API / 稳定返回映射都围绕这版 contract 建立。
+- 也就是说，当前问题不再是“要不要兼容更旧 contract”，而是：
+
+```text
+这版 final contract 是否清晰、稳定、足以让另外两边开始构建。
+```
+
+### 当前已确认成立的收口点
+
+- **请求 contract 已收口**：
+  - `TaskSubmitRequest` 当前保留的外部调用面为 `caller_domain / pipeline_stage / template_key / input / messages / params / expected_output_type / output_schema / idempotency_key / metadata / max_attempts / priority`。
+  - 业务上下文通过 `metadata` 承接，不再继续把 build/release/ref/request 这些 caller 概念做成 runtime 顶层字段。
+- **结果 contract 已开始稳定化**：
+  - `get_task/get_result/get_attempts/get_events` 已增加稳定映射层，开始屏蔽底层 DB 字段变化。
+  - `task["metadata"]`、`result["parsed_output"]`、`attempt["..."]` 等稳定字段已经成形，不再强迫调用方理解数据库列名。
+- **执行语义已能支撑两类调用方**：
+  - `/tasks + Worker` 支撑 Mining 的异步批量模式。
+  - `/execute` 支撑 Serving 的同步在线模式。
+  - `execute()` 与 worker 的 claim 竞态已有原子 claim + 轮询结果分支，至少在设计上已闭环到统一 runtime。
+- 因此，从“另外两边能不能开始基于它接入”这个问题看，当前答案已经是：
+
+```text
+可以。
+```
+
+### P2. 仓库内文档与示例仍未完全收口到这版最终 contract，会误导后续接入方
+
+- 虽然代码 contract 和 `docs/integration/llm-service-integration-guide.md` 已经基本收口，但仓库里仍残留多处旧写法：
+  - `llm_service/README.md` 仍演示 `build_id/release_id/ref_type/ref_id`
+  - `llm_service/QUICKSTART.md` 仍演示 `request_id/ref_type/ref_id`
+  - `docs/handoffs/2026-04-22-v11-llm-service-claude-llm-fix.md` 里的 Mining/Serving 示例仍沿用旧参数
+  - `llm_service/client.py` 自身 docstring 中还残留 `result["parsed_output_json"]` 旧返回写法，而稳定返回结构实际是 `result["parsed_output"]`
+- 这意味着当前真正阻碍 Mining / Serving 稳定接入的，不再是 runtime 主逻辑，而是**文档口径仍然分裂**。
+- 这类问题不会否定当前 final contract，但会误导后续实现者继续按旧写法开发。
+
+## 修订后的测试缺口（最终收口口径）
+
+- 当前仍未看到覆盖“这版 final contract 作为唯一 contract”的仓库级文档一致性检查。
+- 当前我尝试复跑 `llm_service` 相关测试，仍受本机 `tmp_path` 权限错误 `WinError 5` 影响，无法在本机完成 pytest 集成验证；因此本轮结论依然以代码与契约静态审查为主。
+
+## 修订后的最终评估
+
+- 当前这版 `llm_service` 的 final contract 已经足以作为 **Mining / Serving 的统一接入基线**：
+  - request contract 已收口到 `metadata` 扩展入口；
+  - result / task / attempts / events 也开始形成稳定 façade；
+  - 同步/异步两条调用路径都具备了正式形态。
+- 因此，按管理员本轮明确的新口径，我对 LLM Runtime 的结论更新为：
+
+```text
+已处置
+```
+
+- 但仍保留一个非阻塞残余项：
+  - 仓库内 README / QUICKSTART / fix 文档 / client docstring 仍需同步到这版 final contract，避免另外两边被旧示例误导。
+- 这项残余不再阻断 Mining / Serving 基于当前 contract 开始构建。 
