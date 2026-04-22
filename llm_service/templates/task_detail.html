@@ -87,15 +87,36 @@
             </div>
         </div>
 
-        <!-- Request Messages -->
+        <!-- Request Info -->
         {% if request %}
+        <div class="detail-grid">
+            <div class="detail-card">
+                <h3>Request Config</h3>
+                <table class="kv-table">
+                    <tr><td>Template</td><td>{{ request.prompt_template_key or '(none)' }}</td></tr>
+                    <tr><td>Provider</td><td>{{ request.provider }}</td></tr>
+                    <tr><td>Model</td><td>{{ request.model }}</td></tr>
+                    <tr><td>Output Type</td><td>{{ request.expected_output_type }}</td></tr>
+                    <tr><td>Request ID</td><td class="mono">{{ request.id[:16] if request.id and request.id|length > 16 else request.id }}</td></tr>
+                </table>
+            </div>
+            <div class="detail-card">
+                <h3>Input Data</h3>
+                {% if input_str and input_str != '{}' %}
+                <pre style="max-height:200px;">{{ input_str }}</pre>
+                {% else %}
+                <span style="color:#64748b;font-size:0.85rem;">(no input data)</span>
+                {% endif %}
+            </div>
+        </div>
+
         <div class="detail-card full-width" style="margin-bottom:1.5rem;">
-            <h3>Request Messages</h3>
+            <h3>Actual Prompt Sent to Model</h3>
             <pre>{% for msg in messages %}
-[{{ msg.role }}]
+<span style="color:#60a5fa;font-weight:600;">[{{ msg.role }}]</span>
 {{ msg.content }}
 {% endfor %}</pre>
-            {% if request.expected_output_type != 'text' %}
+            {% if request.expected_output_type != 'text' and schema_str and schema_str != '{}' %}
             <h3 style="margin-top:1rem;">Output Schema</h3>
             <pre>{{ schema_str }}</pre>
             {% endif %}

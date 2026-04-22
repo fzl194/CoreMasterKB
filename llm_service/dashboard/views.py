@@ -108,6 +108,7 @@ async def task_detail(request: Request, task_id: str):
 
     messages = []
     schema_str = ""
+    input_str = ""
     if request_data:
         try:
             messages = json.loads(request_data.get("messages_json", "[]"))
@@ -117,6 +118,10 @@ async def task_detail(request: Request, task_id: str):
             schema_str = json.dumps(json.loads(request_data.get("output_schema_json", "{}")), indent=2, ensure_ascii=False)
         except (json.JSONDecodeError, TypeError):
             schema_str = request_data.get("output_schema_json", "")
+        try:
+            input_str = json.dumps(json.loads(request_data.get("input_json", "{}")), indent=2, ensure_ascii=False)
+        except (json.JSONDecodeError, TypeError):
+            input_str = request_data.get("input_json", "")
 
     # Result
     cur = await db.execute("SELECT * FROM agent_llm_results WHERE task_id = ?", (task_id,))
@@ -153,6 +158,7 @@ async def task_detail(request: Request, task_id: str):
         request=request_data,
         messages=messages,
         schema_str=schema_str,
+        input_str=input_str,
         result=result,
         parsed_str=parsed_str,
         validation_errors_str=validation_errors_str,

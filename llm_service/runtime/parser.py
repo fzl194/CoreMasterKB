@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 
 from jsonschema import ValidationError as JsValidationError, validate as js_validate
@@ -26,8 +27,12 @@ def parse_output(
     if expected_type == "text":
         return ParseResult(parse_status="succeeded", text_output=raw_text)
 
+    # Strip markdown code fences (```json ... ``` or ``` ... ```)
+    stripped = re.sub(r"^```(?:json)?\s*\n?", "", raw_text.strip())
+    stripped = re.sub(r"\n?```\s*$", "", stripped).strip()
+
     try:
-        parsed = json.loads(raw_text)
+        parsed = json.loads(stripped)
     except (json.JSONDecodeError, TypeError) as e:
         return ParseResult(parse_status="failed", parse_error=str(e))
 
