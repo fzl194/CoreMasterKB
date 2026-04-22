@@ -47,8 +47,13 @@ class RuntimeTracker:
     # -- Run documents --
 
     def register_document(self, data: MiningRunDocumentData) -> str:
-        self._db.insert_run_document(data)
-        return data.id
+        now = _utcnow()
+        patched = MiningRunDocumentData(
+            **{k: v for k, v in data.__dict__.items() if k != "started_at"},
+            started_at=now,
+        )
+        self._db.insert_run_document(patched)
+        return patched.id
 
     def commit_document(
         self,

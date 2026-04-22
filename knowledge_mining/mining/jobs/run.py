@@ -155,8 +155,12 @@ def _run_pipeline(
     # Phase 1: Ingest
     docs, ingest_summary = ingest_directory(input_path, params)
 
+    # Create batch in asset_core (before create_run so batch_id is available)
+    batch_id = uuid.uuid4().hex
+
     tracker.create_run(MiningRunData(
         id=run_id,
+        source_batch_id=batch_id,
         input_path=str(input_path),
         status="running",
         total_documents=len(docs),
@@ -164,9 +168,6 @@ def _run_pipeline(
         metadata_json={"ingest_summary": ingest_summary},
     ))
     runtime_db.commit()
-
-    # Create batch in asset_core
-    batch_id = uuid.uuid4().hex
     asset_db.upsert_source_batch(
         batch_id=batch_id,
         batch_code=f"batch-{run_id[:8]}",
