@@ -140,25 +140,30 @@ async def test_schema_validation(api_client):
     assert body["result"]["parse_status"] == "schema_invalid"
 
 
-async def test_request_id_persisted(api_client):
-    """request_id passed by caller is stored in task and request rows."""
+async def test_metadata_persisted(api_client):
+    """metadata passed by caller is stored in task row."""
     resp = await api_client.post(
         "/api/v1/execute",
         json={
             "caller_domain": "mining",
             "pipeline_stage": "extract",
             "messages": [{"role": "user", "content": "test"}],
-            "request_id": "req-abc-123",
+            "metadata": {"source": "unit-test", "batch_no": 42},
         },
     )
     assert resp.status_code == 200
     task_id = resp.json()["task_id"]
 
-    # Verify request_id on task row
+    # Verify metadata on task row
     task = (await api_client.get(f"/api/v1/tasks/{task_id}")).json()
-    assert task["request_id"] == "req-abc-123"
+    meta = task.get("metadata_json") or task.get("metadata")
+    if isinstance(meta, str):
+        import json as _json
+        meta = _json.loads(meta)
+    assert meta["source"] == "unit-test"
+    assert meta["batch_no"] == 42
 
-    # Verify request row id matches
+    # Verify request row exists (auto-generated UUID)
     attempts = (await api_client.get(f"/api/v1/tasks/{task_id}/attempts")).json()
     assert len(attempts) == 1
 

@@ -117,8 +117,8 @@ async def test_resolve_template_caller_messages_take_precedence(db):
     assert resolved["messages"] == caller_messages
 
 
-async def test_execute_with_request_id(db):
-    """request_id is persisted to task and request rows."""
+async def test_execute_metadata_persisted(db):
+    """metadata is stored in task row and request row is auto-generated."""
     from llm_service.config import LLMServiceConfig
     from llm_service.providers.mock import MockProvider
     from llm_service.runtime.service import LLMService
@@ -130,19 +130,20 @@ async def test_execute_with_request_id(db):
     result = await svc.execute(
         "mining", "test",
         messages=[{"role": "user", "content": "hi"}],
-        request_id="req-test-001",
+        metadata={"caller": "test-case", "run": 1},
     )
     task_id = result["task_id"]
 
-    # Verify request_id on task
-    cur = await db.execute("SELECT request_id FROM agent_llm_tasks WHERE id = ?", (task_id,))
+    # Verify metadata on task
+    cur = await db.execute("SELECT metadata_json FROM agent_llm_tasks WHERE id = ?", (task_id,))
     row = await cur.fetchone()
-    assert row["request_id"] == "req-test-001"
+    meta = json.loads(row["metadata_json"])
+    assert meta["caller"] == "test-case"
 
-    # Verify request row exists
+    # Verify request row exists with auto-generated UUID
     cur = await db.execute("SELECT id FROM agent_llm_requests WHERE task_id = ?", (task_id,))
     row = await cur.fetchone()
-    assert row["id"] == "req-test-001"
+    assert row["id"]  # auto-generated, not empty
 
 
 async def test_execute_with_text_template_parses_as_text(db):

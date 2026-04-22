@@ -49,7 +49,7 @@ async def dashboard(request: Request, status: str = "", domain: str = "", stage:
 
     sql = f"""
         SELECT t.id, t.caller_domain, t.pipeline_stage, t.status,
-               t.attempt_count, t.created_at,
+               t.attempt_count, t.created_at, t.metadata_json,
                a.total_tokens, a.latency_ms
         FROM agent_llm_tasks t
         LEFT JOIN (
@@ -100,6 +100,13 @@ async def task_detail(request: Request, task_id: str):
             duration_ms = int((e - s).total_seconds() * 1000)
         except (ValueError, TypeError):
             pass
+
+    # Metadata
+    metadata_str = ""
+    try:
+        metadata_str = json.dumps(json.loads(task.get("metadata_json", "{}")), indent=2, ensure_ascii=False)
+    except (json.JSONDecodeError, TypeError):
+        metadata_str = task.get("metadata_json", "")
 
     # Request
     cur = await db.execute("SELECT * FROM agent_llm_requests WHERE task_id = ?", (task_id,))
@@ -155,6 +162,7 @@ async def task_detail(request: Request, task_id: str):
     html = tmpl.get_template("task_detail.html").render(
         task=task,
         duration_ms=duration_ms,
+        metadata_str=metadata_str,
         request=request_data,
         messages=messages,
         schema_str=schema_str,

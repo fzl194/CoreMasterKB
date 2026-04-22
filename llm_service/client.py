@@ -25,8 +25,12 @@ class LLMClient:
                 pipeline_stage="retrieval_units",
                 template_key="mining-question-gen",
                 input={"section_title": section.title, "content": section.text},
-                ref_type="section", ref_id=section.id,
-                build_id=build_id,
+                metadata={
+                    "caller_context": {
+                        "ref": {"type": "section", "id": section.id},
+                        "build_id": build_id,
+                    }
+                },
             )
             task_ids.append(tid)
 
@@ -36,15 +40,6 @@ class LLMClient:
             if task["status"] == "succeeded":
                 result = await client.get_result(tid)
                 questions = result["parsed_output_json"]
-
-        # Alternative: entity extraction (text output)
-        tid = await client.submit(
-            caller_domain="mining",
-            pipeline_stage="enrich",
-            template_key="mining-entity-extract",
-            input={"text": section.text},
-            ref_type="section", ref_id=section.id,
-        )
 
     ### Serving (sync online enhancement via execute)
 
@@ -56,7 +51,7 @@ class LLMClient:
             pipeline_stage="normalizer",
             template_key="serving-query-rewrite",
             input={"query": user_query},
-            request_id=request_id,
+            metadata={"caller_context": {"request_id": request_id}},
         )
         rewritten = result["result"]["parsed_output"]
 
@@ -66,7 +61,6 @@ class LLMClient:
             pipeline_stage="planner",
             template_key="serving-intent-extract",
             input={"query": user_query},
-            request_id=request_id,
         )
 
     ### Caller-provided messages (no template)
@@ -79,7 +73,6 @@ class LLMClient:
                 {"role": "user", "content": f"Query: {q}\\nDocs: {docs}"},
             ],
             expected_output_type="json_array",
-            request_id=request_id,
         )
     """
 
@@ -116,12 +109,8 @@ class LLMClient:
         params: dict | None = None,
         expected_output_type: str | None = None,
         output_schema: dict | None = None,
-        ref_type: str | None = None,
-        ref_id: str | None = None,
-        build_id: str | None = None,
-        release_id: str | None = None,
-        request_id: str | None = None,
         idempotency_key: str | None = None,
+        metadata: dict | None = None,
         max_attempts: int = 3,
         priority: int = 100,
     ) -> dict[str, Any]:
@@ -138,12 +127,8 @@ class LLMClient:
             ("params", params),
             ("expected_output_type", expected_output_type),
             ("output_schema", output_schema),
-            ("ref_type", ref_type),
-            ("ref_id", ref_id),
-            ("build_id", build_id),
-            ("release_id", release_id),
-            ("request_id", request_id),
             ("idempotency_key", idempotency_key),
+            ("metadata", metadata),
         ]:
             if v is not None:
                 payload[k] = v

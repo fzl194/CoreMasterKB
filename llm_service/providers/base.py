@@ -10,7 +10,6 @@ class ProviderResponse:
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
     total_tokens: int | None = None
-    provider_request_id: str | None = None
     raw_response: dict | None = None
 
 

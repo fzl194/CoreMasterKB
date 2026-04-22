@@ -9,7 +9,7 @@ import aiosqlite
 _ALLOWED_UPDATE_COLUMNS = frozenset({
     "template_key", "template_version", "purpose", "system_prompt",
     "user_prompt_template", "expected_output_type", "output_schema_json",
-    "output_schema_key", "status", "metadata_json",
+    "status", "metadata_json",
 })
 
 

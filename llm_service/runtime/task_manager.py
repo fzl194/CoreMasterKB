@@ -32,12 +32,7 @@ class TaskManager:
         caller_domain: str,
         pipeline_stage: str,
         *,
-        request_id: str | None = None,
         idempotency_key: str | None = None,
-        ref_type: str | None = None,
-        ref_id: str | None = None,
-        build_id: str | None = None,
-        release_id: str | None = None,
         max_attempts: int | None = None,
         priority: int = 100,
         metadata: dict | None = None,
@@ -52,13 +47,13 @@ class TaskManager:
         ma = max_attempts or self._default_max_attempts
         await self._db.execute(
             """INSERT INTO agent_llm_tasks
-               (id, caller_domain, pipeline_stage, request_id, ref_type, ref_id, build_id, release_id,
+               (id, caller_domain, pipeline_stage,
                 idempotency_key, status, priority, available_at, attempt_count, max_attempts,
                 created_at, updated_at, metadata_json)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, 0, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, 'queued', ?, ?, 0, ?, ?, ?, ?)""",
             (
-                task_id, caller_domain, pipeline_stage, request_id, ref_type, ref_id,
-                build_id, release_id, idempotency_key, priority, now, ma,
+                task_id, caller_domain, pipeline_stage,
+                idempotency_key, priority, now, ma,
                 now, now, json.dumps(metadata or {}),
             ),
         )

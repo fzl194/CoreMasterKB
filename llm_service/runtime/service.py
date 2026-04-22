@@ -111,12 +111,8 @@ class LLMService:
         params: dict | None = None,
         expected_output_type: str | None = None,
         output_schema: dict | None = None,
-        ref_type: str | None = None,
-        ref_id: str | None = None,
-        build_id: str | None = None,
-        release_id: str | None = None,
-        request_id: str | None = None,
         idempotency_key: str | None = None,
+        metadata: dict | None = None,
         max_attempts: int = 3,
         priority: int = 100,
     ) -> str:
@@ -130,11 +126,9 @@ class LLMService:
 
         task_id = await self._mgr.submit(
             caller_domain, pipeline_stage,
-            request_id=request_id,
             idempotency_key=idempotency_key,
-            ref_type=ref_type, ref_id=ref_id,
-            build_id=build_id, release_id=release_id,
             max_attempts=max_attempts, priority=priority,
+            metadata=metadata,
         )
 
         # Only create request row if this is a new task
@@ -142,7 +136,7 @@ class LLMService:
         req_count = (await cur.fetchone())["cnt"]
         if req_count == 0:
             now = datetime.now(timezone.utc).isoformat()
-            actual_request_id = request_id or str(uuid.uuid4())
+            request_id = str(uuid.uuid4())
             provider_instance = self._executor._provider
             await self._db.execute(
                 """INSERT INTO agent_llm_requests
@@ -150,7 +144,7 @@ class LLMService:
                     params_json, expected_output_type, output_schema_json, created_at)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
-                    actual_request_id, task_id, provider_instance.provider_name,
+                    request_id, task_id, provider_instance.provider_name,
                     provider_instance.default_model, template_key,
                     json.dumps(actual_messages or []), json.dumps(input or {}),
                     json.dumps(params or {}), actual_expected_type,
@@ -176,12 +170,8 @@ class LLMService:
         params: dict | None = None,
         expected_output_type: str | None = None,
         output_schema: dict | None = None,
-        ref_type: str | None = None,
-        ref_id: str | None = None,
-        build_id: str | None = None,
-        release_id: str | None = None,
-        request_id: str | None = None,
         idempotency_key: str | None = None,
+        metadata: dict | None = None,
         max_attempts: int = 3,
         priority: int = 100,
         timeout: int | None = None,
@@ -192,10 +182,8 @@ class LLMService:
             template_key=template_key, input=input, messages=messages,
             params=params, expected_output_type=expected_output_type,
             output_schema=output_schema,
-            ref_type=ref_type, ref_id=ref_id,
-            build_id=build_id, release_id=release_id,
-            request_id=request_id,
             idempotency_key=idempotency_key,
+            metadata=metadata,
             max_attempts=max_attempts, priority=priority,
         )
 

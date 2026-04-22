@@ -70,9 +70,6 @@
                     <tr><td>Priority</td><td>{{ task.priority }}</td></tr>
                     <tr><td>Attempts</td><td>{{ task.attempt_count }} / {{ task.max_attempts }}</td></tr>
                     <tr><td>Idempotency</td><td>{{ task.idempotency_key or '-' }}</td></tr>
-                    {% if task.build_id %}<tr><td>Build ID</td><td class="mono">{{ task.build_id }}</td></tr>{% endif %}
-                    {% if task.release_id %}<tr><td>Release ID</td><td class="mono">{{ task.release_id }}</td></tr>{% endif %}
-                    {% if task.ref_type %}<tr><td>Ref</td><td>{{ task.ref_type }} / {{ task.ref_id }}</td></tr>{% endif %}
                 </table>
             </div>
             <div class="detail-card">
@@ -86,6 +83,14 @@
                 </table>
             </div>
         </div>
+
+        <!-- Metadata -->
+        {% if metadata_str and metadata_str != '{}' %}
+        <div class="detail-card full-width" style="margin-bottom:1.5rem;">
+            <h3>Caller Metadata</h3>
+            <pre style="max-height:200px;">{{ metadata_str }}</pre>
+        </div>
+        {% endif %}
 
         <!-- Request Info -->
         {% if request %}

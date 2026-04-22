@@ -22,7 +22,13 @@ def test_task_submit_request_defaults():
 def test_task_submit_request_validation_rejects_bad_domain():
     with pytest.raises(ValueError):
         TaskSubmitRequest(
-            caller_domain="invalid_domain",
+            caller_domain="",
+            pipeline_stage="test",
+        )
+
+    with pytest.raises(ValueError):
+        TaskSubmitRequest(
+            caller_domain="x" * 65,
             pipeline_stage="test",
         )
 

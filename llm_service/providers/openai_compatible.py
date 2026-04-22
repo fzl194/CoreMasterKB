@@ -70,6 +70,5 @@ class OpenAICompatibleProvider:
             prompt_tokens=usage.get("prompt_tokens"),
             completion_tokens=usage.get("completion_tokens"),
             total_tokens=usage.get("total_tokens"),
-            provider_request_id=data.get("id"),
             raw_response=data,
         )

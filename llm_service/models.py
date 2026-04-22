@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 
 
 class TaskSubmitRequest(BaseModel):
-    caller_domain: str = Field(..., pattern=r"^(mining|serving|evaluation|admin)$")
+    caller_domain: str = Field(..., min_length=1, max_length=64)
     pipeline_stage: str = Field(..., pattern=r"^[a-z][a-z0-9_]{1,63}$")
     template_key: str | None = None
     input: dict[str, Any] | None = None
@@ -20,12 +20,8 @@ class TaskSubmitRequest(BaseModel):
         default=None, pattern=r"^(json_object|json_array|text)$"
     )
     output_schema: dict[str, Any] | None = None
-    ref_type: str | None = None
-    ref_id: str | None = None
-    build_id: str | None = None
-    release_id: str | None = None
-    request_id: str | None = None
     idempotency_key: str | None = None
+    metadata: dict[str, Any] | None = None
     max_attempts: int = Field(default=3, ge=1, le=10)
     priority: int = Field(default=100, ge=1)
 
@@ -38,7 +34,6 @@ class ParsedResult:
     parse_status: str  # succeeded | failed | schema_invalid
     parsed_output: dict | list | None = None
     text_output: str | None = None
-    confidence: float | None = None
     validation_errors: list[str] = field(default_factory=list)
 
 
@@ -73,10 +68,7 @@ class TaskDetail:
     caller_domain: str
     pipeline_stage: str
     status: str
-    ref_type: str | None
-    ref_id: str | None
-    build_id: str | None
-    release_id: str | None
+    metadata: dict[str, Any] | None
     attempt_count: int
     max_attempts: int
     created_at: str

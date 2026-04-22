@@ -93,7 +93,6 @@ async def main():
         "pipeline_stage": "normalizer",
         "template_key": "demo-summary",
         "input": {"text": "大语言模型（LLM）是一种基于深度学习的自然语言处理技术，通过海量文本数据训练，能够理解和生成人类语言。"},
-        "request_id": "demo-req-001",
         "max_attempts": 2,
     })
     result = resp.json()
@@ -119,9 +118,7 @@ async def main():
             "pipeline_stage": "retrieval_units",
             "template_key": "demo-qa-gen",
             "input": section,
-            "ref_type": "section",
-            "ref_id": f"section-{i+1}",
-            "request_id": f"demo-batch-{i+1}",
+            "metadata": {"ref_type": "section", "ref_id": f"section-{i+1}"},
             "max_attempts": 3,
         })
         if resp.status_code == 200:
