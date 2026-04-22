@@ -10,7 +10,6 @@ CREATE TABLE IF NOT EXISTS agent_llm_prompt_templates (
     expected_output_type TEXT NOT NULL CHECK (
         expected_output_type IN ('json_object', 'json_array', 'text')
     ),
-    output_schema_key    TEXT,
     output_schema_json   TEXT NOT NULL DEFAULT '{}',
     status               TEXT NOT NULL CHECK (status IN ('draft', 'active', 'archived')),
     created_at           TEXT NOT NULL,
@@ -20,15 +19,8 @@ CREATE TABLE IF NOT EXISTS agent_llm_prompt_templates (
 
 CREATE TABLE IF NOT EXISTS agent_llm_tasks (
     id                TEXT PRIMARY KEY,
-    caller_domain     TEXT NOT NULL CHECK (
-        caller_domain IN ('mining', 'serving', 'evaluation', 'admin')
-    ),
+    caller_domain     TEXT NOT NULL,
     pipeline_stage    TEXT NOT NULL,
-    ref_type          TEXT,
-    ref_id            TEXT,
-    build_id          TEXT,
-    release_id        TEXT,
-    request_id        TEXT,
     idempotency_key   TEXT,
     status            TEXT NOT NULL CHECK (
         status IN ('queued', 'running', 'succeeded', 'failed', 'dead_letter', 'cancelled')
@@ -54,14 +46,12 @@ CREATE TABLE IF NOT EXISTS agent_llm_requests (
     provider                 TEXT NOT NULL,
     model                    TEXT NOT NULL,
     prompt_template_key      TEXT,
-    prompt_template_version  TEXT,
     messages_json            TEXT NOT NULL DEFAULT '[]',
     input_json               TEXT NOT NULL DEFAULT '{}',
     params_json              TEXT NOT NULL DEFAULT '{}',
     expected_output_type     TEXT NOT NULL CHECK (
         expected_output_type IN ('json_object', 'json_array', 'text')
     ),
-    output_schema_key        TEXT,
     output_schema_json       TEXT NOT NULL DEFAULT '{}',
     created_at               TEXT NOT NULL,
     metadata_json            TEXT NOT NULL DEFAULT '{}'
@@ -78,7 +68,6 @@ CREATE TABLE IF NOT EXISTS agent_llm_attempts (
     status             TEXT NOT NULL CHECK (
         status IN ('running', 'succeeded', 'failed', 'timeout', 'rate_limited')
     ),
-    provider_request_id TEXT,
     raw_output_text    TEXT,
     raw_response_json  TEXT NOT NULL DEFAULT '{}',
     error_type         TEXT,
@@ -107,7 +96,6 @@ CREATE TABLE IF NOT EXISTS agent_llm_results (
     text_output            TEXT,
     parse_error            TEXT,
     validation_errors_json TEXT NOT NULL DEFAULT '[]',
-    confidence             REAL,
     created_at             TEXT NOT NULL,
     metadata_json          TEXT NOT NULL DEFAULT '{}'
 );

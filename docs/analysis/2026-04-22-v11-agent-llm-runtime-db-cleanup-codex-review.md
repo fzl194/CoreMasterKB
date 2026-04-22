@@ -253,6 +253,33 @@ agent_llm_events = 生命周期流水
 这里的 key 只是**推荐约定**，不是 runtime schema 合同。  
 也就是说 runtime 不理解这些字段的业务语义，只负责存储和返回。
 
+### client 层推荐约定
+
+虽然 runtime 不强校验 caller context 结构，但调用方最好在 client 层统一一个推荐形状：
+
+```json
+{
+  "caller_context": {
+    "request_id": "req-001",
+    "ref": {
+      "type": "section",
+      "id": "sec-001"
+    },
+    "build_id": "build-2026-04-22",
+    "release_id": "release-prod-2026-04-22"
+  }
+}
+```
+
+这样后续 dashboard / task detail 可以优先尝试提取：
+
+- `caller_context.request_id`
+- `caller_context.ref`
+- `caller_context.build_id`
+- `caller_context.release_id`
+
+提取不到时，再回退展示完整 `metadata_json`。
+
 ### `agent_llm_requests.metadata_json`
 
 只保留给 request 级附加信息，例如：
@@ -323,8 +350,8 @@ Mining / Serving 若要带上下文，都走 metadata。
 
 这部分应改成：
 
-- 直接展示 `metadata_json`
-- 或展示一个 task metadata 摘要块
+- 优先尝试从 `metadata_json.caller_context` 提取摘要展示
+- 提取不到时再回退显示完整 `metadata_json`
 
 而不是继续假定 runtime 理解这些固定业务字段。
 
