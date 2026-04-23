@@ -1,4 +1,7 @@
-# Agent Serving v1.1
+# Agent Serving — 方案架构文档
+
+> 在线知识检索层：Active Release → 混合检索 → ContextPack
+> 版本：v1.1（生产就绪）| 数据库：asset_core（只读）| 端口：8000
 
 `agent_serving` 是 CoreMasterKB 的在线知识使用层。它面向 Skill / Agent 提供 HTTP API，从 Mining 生成的知识资产数据库中读取唯一 active release，检索 `retrieval_units`，通过 `source_refs_json` 下钻到 `raw_segments` 和 `relations`，最后返回结构化的 `ContextPack`。
 
@@ -189,16 +192,53 @@ python -m pytest agent_serving/tests -q
 
 **总计：66 passed, 1 skipped, 0 failed**
 
-## 后续演进位置
+## 后续演进方向
+
+### 预留扩展点
 
 | 方向 | 预留位置 | 说明 |
 |------|---------|------|
 | Vector retrieval | `retrieval/retriever.py` → VectorRetriever | 抽象 Retriever 接口，FTS5 为首实现 |
-| Reranker | `retrieval/` 新增 | 后置排序，改善语义相关性 |
-| LLM planner | `application/planner.py` → LLMRuntimeClient | 当前 placeholder，接 agent_llm_runtime |
+| Reranker | `pipeline/reranker.py` | 已有 ScoreReranker（规则），预留 LLM/Cross-Encoder |
+| LLM planner | `application/planner.py` → LLMPlannerProvider | 已实现 LLM + 规则双模式 |
 | Query rewrite | Normalizer LLM first | LLM 返回时自动使用，rule fallback |
 | Ontology expansion | QueryPlan.expansion 字段 | 预留，未实现 |
 | 缓存 | Repository 层 | 未实现，按需加入 |
+
+### v1.2 演进路线
+
+#### 检索策略增强（核心差异化）
+
+| 方向 | 说明 | 预期收益 |
+|------|------|---------|
+| **向量检索器** | BGE-M3 多语言 embedding + cosine 相似度匹配 | 弥合同义词/表述差异，补充 FTS5 关键词盲区 |
+| **HyDE** | LLM 生成假设回答文档，取其 embedding 做匹配 | 弥合 query-doc 语义鸿沟 |
+| **父子层级分块** | Mining 侧生成 parent-child 关系，Serving 按需返回 | 小 chunk 精准匹配 + 大 chunk 完整上下文 |
+| **上下文增强检索** | Mining 侧 LLM 为每个 chunk 生成上下文描述 | 减少检索失败率 |
+
+#### 排序质量提升
+
+| 方向 | 说明 |
+|------|------|
+| **Cross-Encoder 精排** | 对 RRF 融合后的 top-K 候选做交叉编码器重排 |
+| **LLM Reranker** | 使用 LLM 对候选进行相关性评分 |
+| **语篇关系扩展** | 利用 Mining 侧的语篇关系（elaboration/cause_effect/contrast）做证据扩展 |
+
+#### 架构增强
+
+| 方向 | 说明 |
+|------|------|
+| **结果缓存** | Redis 或内存缓存热门查询结果 |
+| **分页支持** | 大结果集分页返回 |
+| **多 channel** | 支持 dev/staging/prod 多个 release channel |
+| **WebSocket 实时推送** | 查询进度和部分结果实时推送 |
+
+### v1.2+ 远期方向
+
+- **声明式查询引擎**：seed / expand / combine / aggregate / project 五个代数原语
+- **双层图遍历**：推理层（本体语义边）+ 溯源层（Fact→Document 证据链）分离查询
+- **社区摘要检索**：GraphRAG 式社区检测后，按社区聚合摘要
+- **五维置信度**：source_authority × extraction_method × ontology_fit × cross_source_consistency × temporal_validity
 
 ## 和 Mining 的边界
 
@@ -236,3 +276,11 @@ Serving 不做：
 | 修改 ContextPack 组装 | `serving/application/assembler.py` |
 | 修改 DB 初始化 | `serving/main.py`, `serving/repositories/schema_adapter.py` |
 | 增加真实 Mining DB 契约测试 | `tests/test_mining_contract.py` |
+
+## 相关文档
+
+- [Asset Core Schema](../databases/asset_core/schemas/001_asset_core.sqlite.sql) — Serving 读取的数据表结构
+- [v1.1 架构文档](../docs/architecture/2026-04-21-coremasterkb-v1.1-architecture.md)
+- [v1.2 演进 Backlog](../.dev/2026-04-22-v12-evolution-backlog.md)
+- [LLM 集成指南](../docs/integration/llm-service-integration-guide.md)
+- [架构演示](../docs/architecture/coremasterkb-v1.2-architecture.html)
