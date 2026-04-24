@@ -7,6 +7,8 @@ Key design:
 """
 from __future__ import annotations
 
+from typing import Any
+
 from markdown_it import MarkdownIt
 
 from knowledge_mining.mining.models import ContentBlock, SectionNode
@@ -60,6 +62,7 @@ def _tokens_to_blocks(tokens: list) -> list[ContentBlock]:
         elif tok.type in ("bullet_list_open", "ordered_list_open"):
             ordered = tok.type == "ordered_list_open"
             items: list[str] = []
+            items_nested: list[dict[str, Any]] = []
             line_start = tok.map[0] if tok.map else None
             j = i + 1
             depth = 1
@@ -70,14 +73,23 @@ def _tokens_to_blocks(tokens: list) -> list[ContentBlock]:
                     depth -= 1
                     if depth == 0:
                         break
-                if depth == 1 and tokens[j].type == "inline":
-                    items.append(tokens[j].content)
+                if tokens[j].type == "inline":
+                    items_nested.append({"text": tokens[j].content, "depth": depth})
+                    if depth == 1:
+                        items.append(tokens[j].content)
                 j += 1
             line_end = tok.map[1] if tok.map else None
+            hierarchical_text = _format_nested_items(items_nested, ordered)
             blocks.append(ContentBlock(
-                block_type="list", text="\n".join(items),
+                block_type="list", text=hierarchical_text,
                 line_start=line_start, line_end=line_end,
-                structure={"kind": "list", "ordered": ordered, "items": items, "item_count": len(items)},
+                structure={
+                    "kind": "list",
+                    "ordered": ordered,
+                    "items": items,
+                    "items_nested": items_nested,
+                    "item_count": len(items_nested),
+                },
             ))
             i = j + 1
             continue
@@ -198,6 +210,27 @@ def _parse_table(tokens: list, start: int) -> ContentBlock:
             "col_count": col_count,
         },
     )
+
+
+def _format_nested_items(items_nested: list[dict[str, Any]], ordered: bool) -> str:
+    """Format nested list items into indented hierarchical text."""
+    if not items_nested:
+        return ""
+    lines: list[str] = []
+    ordered_counter = 0
+    last_depth = 0
+    for item in items_nested:
+        depth = item["depth"]
+        text = item["text"]
+        indent = "  " * (depth - 1)
+        if ordered and depth == 1:
+            ordered_counter += 1
+            prefix = f"{ordered_counter}. "
+        else:
+            prefix = "- "
+        lines.append(f"{indent}{prefix}{text}")
+        last_depth = depth
+    return "\n".join(lines)
 
 
 def _build_section_tree(blocks: list[ContentBlock]) -> SectionNode:

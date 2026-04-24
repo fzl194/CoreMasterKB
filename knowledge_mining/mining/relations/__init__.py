@@ -16,6 +16,21 @@ from typing import Any
 from knowledge_mining.mining.models import RawSegmentData, SegmentRelationData
 
 
+class DefaultRelationBuilder:
+    """Default relation builder wrapping build_relations() for PipelineConfig."""
+
+    def build(
+        self,
+        segments: list[RawSegmentData],
+        **kwargs: Any,
+    ) -> tuple[list[SegmentRelationData], dict[str, str]]:
+        return build_relations(
+            segments,
+            document_snapshot_id=kwargs.get("document_snapshot_id", ""),
+            max_distance=kwargs.get("max_distance", 5),
+        )
+
+
 def build_relations(
     segments: list[RawSegmentData],
     *,

@@ -33,13 +33,13 @@ from knowledge_mining.mining.models import (
 from knowledge_mining.mining.runtime import RuntimeTracker
 from knowledge_mining.mining.ingestion import ingest_directory
 from knowledge_mining.mining.parsers import create_parser
-from knowledge_mining.mining.segmentation import segment_document
-from knowledge_mining.mining.enrich import enrich_segments
-from knowledge_mining.mining.relations import build_relations
-from knowledge_mining.mining.retrieval_units import build_retrieval_units
+from knowledge_mining.mining.segmentation import DefaultSegmenter
+from knowledge_mining.mining.enrich import RuleBasedEnricher
+from knowledge_mining.mining.relations import DefaultRelationBuilder
 from knowledge_mining.mining.snapshot import select_or_create_snapshot
 from knowledge_mining.mining.publishing import assemble_build, classify_documents, publish_release
 from knowledge_mining.mining.extractors import RuleBasedEntityExtractor, DefaultRoleClassifier  # noqa: F401 — used for enrich
+from knowledge_mining.mining.pipeline import DocumentContext, PipelineConfig, MiningPipeline
 
 
 def run(
@@ -148,11 +148,11 @@ def publish(
 # Internal pipeline implementation
 # ===================================================================
 
-def _init_llm(llm_base_url: str | None, bypass_proxy: bool = False) -> Any:
-    """Initialize LLM question generator if URL provided.
+def _init_llm(llm_base_url: str | None, bypass_proxy: bool = False) -> dict[str, Any] | None:
+    """Initialize LLM services if URL provided.
 
-    Registers template if llm_service is reachable.
-    Returns None if no URL or service unreachable.
+    Registers templates if llm_service is reachable.
+    Returns dict with question_generator and enricher, or None.
     """
     if not llm_base_url:
         return None
@@ -170,7 +170,22 @@ def _init_llm(llm_base_url: str | None, bypass_proxy: bool = False) -> Any:
     for tpl in TEMPLATES:
         client.register_template(tpl)
 
-    return LlmQuestionGenerator(base_url=llm_base_url, bypass_proxy=bypass_proxy)
+    result: dict[str, Any] = {
+        "question_generator": LlmQuestionGenerator(base_url=llm_base_url, bypass_proxy=bypass_proxy),
+    }
+
+    # v1.2: Try to create LlmEnricher if available
+    try:
+        from knowledge_mining.mining.enrich import LlmEnricher
+        result["enricher"] = LlmEnricher(
+            base_url=llm_base_url,
+            fallback_enricher=RuleBasedEnricher(),
+            bypass_proxy=bypass_proxy,
+        )
+    except (ImportError, Exception):
+        pass
+
+    return result
 
 
 def _run_pipeline(
@@ -212,10 +227,22 @@ def _run_pipeline(
     )
     asset_db.commit()
 
-    # Process each document
+    # Build pipeline config with pluggable operators
     entity_extractor = RuleBasedEntityExtractor()
     role_classifier = DefaultRoleClassifier()
-    # Note: extractors/classifiers are passed to enrich, NOT segmentation
+    enricher = RuleBasedEnricher(
+        entity_extractor=entity_extractor,
+        role_classifier=role_classifier,
+    )
+
+    pipeline_config = PipelineConfig(
+        parser_factory=create_parser,
+        segmenter=DefaultSegmenter(),
+        enricher=enricher,
+        relation_builder=DefaultRelationBuilder(),
+        question_generator=question_generator,
+    )
+    pipeline = MiningPipeline(pipeline_config)
 
     committed_count = 0
     failed_count = 0
@@ -273,52 +300,45 @@ def _run_pipeline(
                 title=doc.title,
             )
 
-            # Stage 1: Parse
-            evt = tracker.start_stage(run_id, "parse", rd_id)
-            parser = create_parser(doc.file_type)
-            tree = parser.parse(doc.content, doc.file_name, {})
-            tracker.end_stage(evt, run_id, "parse", output_summary=f"tree={'yes' if tree else 'no'}")
-            runtime_db.commit()
+            # Build document context
+            ctx = DocumentContext(raw_file=doc, profile=profile)
 
-            if tree is None:
+            # Stage tracking callback
+            def _make_stage_cb(rd_id: str, run_id: str):
+                import uuid as _uuid
+                stage_events: dict[str, Any] = {}
+                def cb(stage_name: str, current_ctx: DocumentContext):
+                    evt = tracker.start_stage(run_id, stage_name, rd_id)
+                    stage_events[stage_name] = evt
+                def end_cb(stage_name: str, summary: str = ""):
+                    evt = stage_events.get(stage_name)
+                    if evt:
+                        tracker.end_stage(evt, run_id, stage_name, output_summary=summary)
+                        runtime_db.commit()
+                return cb, end_cb
+
+            stage_cb, stage_end = _make_stage_cb(rd_id, run_id)
+
+            # Run pipeline
+            ctx = pipeline.process_document(ctx, stage_callback=stage_cb)
+
+            if ctx.tree is None:
                 tracker.skip_document(rd_id)
                 skipped_count += 1
                 runtime_db.commit()
                 continue
 
-            # Stage 2: Segment (structure only, no understanding)
-            evt = tracker.start_stage(run_id, "segment", rd_id)
-            segments = segment_document(
-                tree, profile,
-                parser_name=doc.file_type,
-            )
-            tracker.end_stage(evt, run_id, "segment", output_summary=f"{len(segments)} segments")
-            runtime_db.commit()
+            # End stage tracking
+            stage_end("parse", f"tree={'yes' if ctx.tree else 'no'}")
+            stage_end("segment", f"{len(ctx.segments)} segments")
+            stage_end("enrich", f"{len(ctx.segments)} enriched")
+            stage_end("build_relations", f"{len(ctx.relations)} relations")
+            stage_end("build_retrieval_units", f"{len(ctx.retrieval_units)} units")
 
-            # Stage 3: Enrich (formal understanding: entity extraction + role classification)
-            evt = tracker.start_stage(run_id, "enrich", rd_id)
-            segments = enrich_segments(
-                segments,
-                entity_extractor=entity_extractor,
-                role_classifier=role_classifier,
-            )
-            tracker.end_stage(evt, run_id, "enrich", output_summary=f"{len(segments)} enriched")
-            runtime_db.commit()
-
-            # Stage 4: Build relations
-            evt = tracker.start_stage(run_id, "build_relations", rd_id)
-            relations, seg_id_map = build_relations(segments)
-            tracker.end_stage(evt, run_id, "build_relations", output_summary=f"{len(relations)} relations")
-            runtime_db.commit()
-
-            # Stage 5: Build retrieval units (v1.2: pass seg_ids for source_segment_id bridge)
-            evt = tracker.start_stage(run_id, "build_retrieval_units", rd_id)
-            retrieval_units = build_retrieval_units(
-                segments, seg_ids=seg_id_map, document_key=doc_key,
-                question_generator=question_generator,
-            )
-            tracker.end_stage(evt, run_id, "build_retrieval_units", output_summary=f"{len(retrieval_units)} units")
-            runtime_db.commit()
+            segments = list(ctx.segments)
+            relations = list(ctx.relations)
+            seg_id_map = ctx.seg_ids
+            retrieval_units = list(ctx.retrieval_units)
 
             # Stage 6: Select/create snapshot
             evt = tracker.start_stage(run_id, "select_snapshot", rd_id)

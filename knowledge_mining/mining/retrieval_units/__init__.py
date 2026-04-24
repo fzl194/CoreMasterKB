@@ -144,7 +144,8 @@ def build_retrieval_units(
     # Phase 1: Batch-generate all questions (submit all → poll all)
     question_map: dict[str, list[str]] = {}
     if qgen is not None:
-        question_map = qgen.generate_batch(segments)
+        questionworthy = [s for s in segments if _is_questionworthy(s)]
+        question_map = qgen.generate_batch(questionworthy)
 
     # Phase 2: Build units for each segment
     for seg in segments:
@@ -165,6 +166,10 @@ def build_retrieval_units(
             if entity_key not in seen_entity_cards:
                 seen_entity_cards.add(entity_key)
                 units.append(_make_entity_card_unit(seg, ref, source_seg_id))
+
+        # 3b. table_row units (per-row retrieval for structured tables)
+        table_row_units = _make_table_row_units(seg, source_seg_id)
+        units.extend(table_row_units)
 
         # 4. generated_question units (from batch results)
         questions = question_map.get(seg_key, [])
@@ -204,16 +209,20 @@ def _make_raw_text_unit(
 def _make_contextual_text_unit(
     seg: RawSegmentData, source_seg_id: str | None = None,
 ) -> RetrievalUnitData | None:
-    """Contextual text: raw_text with section path prepended."""
-    if not seg.section_path or seg.block_type == "heading":
+    """Contextual text: enriched context beyond raw_text.
+
+    - Tables: natural language description of structure
+    - Lists: hierarchical summary using items_nested
+    - Paragraphs: only when section context adds info not in raw_text
+    """
+    if seg.block_type == "heading":
+        return None
+
+    contextual_text = _build_contextual_content(seg)
+    if not contextual_text:
         return None
 
     section_titles = [p.get("title", "") for p in seg.section_path if p.get("title")]
-    context_prefix = " > ".join(section_titles)
-    if not context_prefix:
-        return None
-
-    contextual_text = f"[{context_prefix}]\n{seg.raw_text}"
 
     return RetrievalUnitData(
         segment_key=f"{seg.document_key}#{seg.segment_index}",
@@ -233,7 +242,7 @@ def _make_contextual_text_unit(
         entity_refs_json=list(seg.entity_refs_json),
         source_refs_json=_build_source_refs(seg),
         source_segment_id=source_seg_id,
-        weight=0.9,
+        weight=0.6,
         metadata_json={
             "section_titles": section_titles,
             "segment_index": seg.segment_index,
@@ -300,6 +309,9 @@ def _make_generated_question_unit(
     source_seg_id: str | None = None,
 ) -> RetrievalUnitData:
     """Generated question unit: one per LLM-generated question."""
+    title = f"Q{question_index + 1}: {question[:60]}"
+    text = f"{question}\n---\n来源: {seg.section_title or '未知'}\n{seg.raw_text[:200]}"
+    search_text = tokenize_for_search(f"{question} {seg.section_title or ''}")
     return RetrievalUnitData(
         segment_key=f"{seg.document_key}#{seg.segment_index}",
         unit_key=f"ru:{seg.document_key}#{seg.segment_index}:gen_q_{question_index}",
@@ -310,9 +322,9 @@ def _make_generated_question_unit(
             "segment_index": seg.segment_index,
             "question_index": question_index,
         },
-        title=question[:80],
-        text=question,
-        search_text=tokenize_for_search(question),
+        title=title,
+        text=text,
+        search_text=search_text,
         block_type=seg.block_type,
         semantic_role=seg.semantic_role,
         facets_json=_build_facets(seg),
@@ -335,6 +347,155 @@ def _build_facets(seg: RawSegmentData) -> dict[str, Any]:
     if seg.section_path:
         facets["section_depth"] = len(seg.section_path)
     return facets
+
+
+def _is_questionworthy(seg: RawSegmentData) -> bool:
+    """Filter segments that should receive question generation.
+
+    Skips:
+    - heading-only segments (just a title, no real content)
+    - very short content (< 15 chars or < 10 tokens)
+    """
+    if seg.block_type == "heading":
+        return False
+    if seg.token_count is not None and seg.token_count < 10:
+        return False
+    if len(seg.raw_text.strip()) < 15:
+        return False
+    return True
+
+
+def _build_contextual_content(seg: RawSegmentData) -> str:
+    """Build contextual text content based on segment type.
+
+    - Tables: natural language description
+    - Lists: hierarchical summary
+    - Paragraphs: only when section context adds information
+    """
+    if seg.block_type == "table":
+        return _build_table_contextual(seg)
+    elif seg.block_type == "list":
+        return _build_list_contextual(seg)
+    else:
+        return _build_paragraph_contextual(seg)
+
+
+def _build_table_contextual(seg: RawSegmentData) -> str:
+    """Generate natural language description for table segments."""
+    struct = seg.structure_json
+    columns = struct.get("columns", [])
+    rows = struct.get("rows", [])
+    if not columns:
+        return ""
+
+    section_ctx = seg.section_title or "该表"
+    parts = [f"在「{section_ctx}」中，包含 {len(rows)} 行数据，列包括：{'、'.join(columns)}。"]
+
+    # Add column value examples from first row
+    if rows:
+        first_row = rows[0]
+        col_descs = []
+        for col in columns:
+            val = first_row.get(col, "")
+            if val:
+                col_descs.append(f"{col}：{val}")
+        if col_descs:
+            parts.append("例如：" + "，".join(col_descs) + "。")
+
+    return "\n".join(parts)
+
+
+def _build_list_contextual(seg: RawSegmentData) -> str:
+    """Generate hierarchical summary for list segments."""
+    struct = seg.structure_json
+    items_nested = struct.get("items_nested", [])
+    items_flat = struct.get("items", [])
+
+    section_ctx = seg.section_title or "以下"
+
+    if items_nested:
+        # Use nested items for richer context
+        top_items = [it for it in items_nested if it.get("depth", 1) == 1]
+        sub_items = [it for it in items_nested if it.get("depth", 1) > 1]
+        parts = [f"在「{section_ctx}」中，共 {len(top_items)} 个主要条目"]
+        if sub_items:
+            parts.append(f"其中包含 {len(sub_items)} 个子项详情")
+        return "，".join(parts) + "。"
+    elif items_flat:
+        return f"在「{section_ctx}」中，包含 {len(items_flat)} 个条目：{'、'.join(items_flat[:5])}。"
+    return ""
+
+
+def _build_paragraph_contextual(seg: RawSegmentData) -> str:
+    """Generate contextual text for paragraphs only when section adds info."""
+    if not seg.section_path:
+        return ""
+
+    # Extract section titles that don't appear in raw_text
+    section_titles = [p.get("title", "") for p in seg.section_path if p.get("title")]
+    extra_context = [t for t in section_titles if t and t not in seg.raw_text]
+    if not extra_context:
+        return ""
+
+    context_prefix = " > ".join(extra_context)
+    return f"[{context_prefix}]\n{seg.raw_text}"
+
+
+def _make_table_row_units(
+    seg: RawSegmentData, source_seg_id: str | None = None,
+) -> list[RetrievalUnitData]:
+    """Generate per-row retrieval units for table segments."""
+    if seg.block_type != "table":
+        return []
+
+    struct = seg.structure_json
+    columns = struct.get("columns", [])
+    rows = struct.get("rows", [])
+    if not columns or not rows:
+        return []
+
+    units: list[RetrievalUnitData] = []
+    for row_idx, row in enumerate(rows):
+        # Build natural language: "A为xxx，B为yyy，C为zzz"
+        parts = []
+        all_values = []
+        for col in columns:
+            val = row.get(col, "")
+            if val:
+                parts.append(f"{col}为{val}")
+                all_values.append(val)
+
+        if not parts:
+            continue
+
+        text = "，".join(parts) + "。"
+        search_text = tokenize_for_search(" ".join(all_values + columns))
+        seg_key = f"{seg.document_key}#{seg.segment_index}"
+
+        units.append(RetrievalUnitData(
+            segment_key=seg_key,
+            unit_key=f"ru:{seg.document_key}#{seg.segment_index}:table_row_{row_idx}",
+            unit_type="table_row",
+            target_type="raw_segment",
+            target_ref_json={
+                "document_key": seg.document_key,
+                "segment_index": seg.segment_index,
+                "row_index": row_idx,
+            },
+            title=f"行{row_idx + 1}: {'、'.join(all_values[:3])}",
+            text=text,
+            search_text=search_text,
+            block_type=seg.block_type,
+            semantic_role=seg.semantic_role,
+            facets_json=_build_facets(seg),
+            entity_refs_json=list(seg.entity_refs_json),
+            source_refs_json=_build_source_refs(seg),
+            source_segment_id=source_seg_id,
+            weight=0.8,
+            metadata_json={"row_index": row_idx, "columns": columns},
+        ))
+
+    return units
 
 
 def _build_source_refs(seg: RawSegmentData) -> dict[str, Any]:

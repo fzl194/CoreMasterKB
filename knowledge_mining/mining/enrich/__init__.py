@@ -94,6 +94,155 @@ def enrich_segments(
     return enricher.enrich(segments)
 
 
+class LlmEnricher:
+    """v1.2: LLM-backed enrichment via llm_service HTTP API.
+
+    Submits segments for LLM understanding, falls back to rule-based on failure.
+    """
+
+    def __init__(
+        self,
+        *,
+        base_url: str = "http://localhost:8900",
+        fallback_enricher: RuleBasedEnricher | None = None,
+        timeout: int = 120,
+        bypass_proxy: bool = False,
+    ) -> None:
+        from knowledge_mining.mining.llm_client import LlmClient
+        self._client = LlmClient(base_url=base_url, bypass_proxy=bypass_proxy)
+        self._fallback = fallback_enricher or RuleBasedEnricher()
+        self._timeout = timeout
+
+    def enrich(
+        self,
+        segments: list[RawSegmentData],
+        **kwargs: Any,
+    ) -> list[RawSegmentData]:
+        """Single-segment enrichment (delegates to enrich_batch)."""
+        return self.enrich_batch(segments, **kwargs)
+
+    def enrich_batch(
+        self,
+        segments: list[RawSegmentData],
+        **kwargs: Any,
+    ) -> list[RawSegmentData]:
+        """Batch enrichment via LLM with rule-based fallback."""
+        if not segments:
+            return []
+
+        # Phase 1: Submit all segments
+        seg_tasks: dict[int, str] = {}  # index -> task_id
+        for idx, seg in enumerate(segments):
+            task_id = self._client.submit_task(
+                template_key="mining-segment-understanding",
+                input={
+                    "text": seg.raw_text,
+                    "section_title": seg.section_title or "",
+                    "block_type": seg.block_type,
+                },
+                caller_domain="mining",
+                pipeline_stage="enrich",
+                expected_output_type="json_object",
+            )
+            if task_id:
+                seg_tasks[idx] = task_id
+
+        # Phase 2: Poll results and merge
+        llm_results: dict[int, dict[str, Any]] = {}
+        for idx, task_id in seg_tasks.items():
+            result = self._client.poll_result(task_id, timeout=self._timeout)
+            if result and isinstance(result, dict):
+                llm_results[idx] = result
+
+        # Phase 3: Apply results, fallback for missing
+        result_segments: list[RawSegmentData] = []
+        fallback_needed = [seg for idx, seg in enumerate(segments) if idx not in llm_results]
+
+        # Apply LLM results to segments that got them
+        for idx, seg in enumerate(segments):
+            if idx in llm_results:
+                result_segments.append(_apply_llm_result(seg, llm_results[idx]))
+            # fallback segments handled below
+
+        # Fallback: enrich segments that didn't get LLM results
+        if fallback_needed:
+            enriched_fallback = self._fallback.enrich(fallback_needed)
+            # Merge back in order
+            result_segments = []
+            fallback_idx = 0
+            for idx, seg in enumerate(segments):
+                if idx in llm_results:
+                    result_segments.append(_apply_llm_result(seg, llm_results[idx]))
+                else:
+                    if fallback_idx < len(enriched_fallback):
+                        result_segments.append(enriched_fallback[fallback_idx])
+                        fallback_idx += 1
+                    else:
+                        result_segments.append(seg)
+
+        return result_segments
+
+
+def _apply_llm_result(seg: RawSegmentData, result: dict[str, Any]) -> RawSegmentData:
+    """Apply LLM enrichment result to a segment."""
+    changes: dict[str, Any] = {}
+
+    # Extract entities from LLM result
+    entities = result.get("entities", [])
+    if entities and isinstance(entities, list):
+        entity_refs = [
+            {"type": e.get("type", "unknown"), "name": e.get("name", "")}
+            for e in entities
+            if e.get("name")
+        ]
+        # Merge with existing entities
+        existing = {(r["type"], r["name"]) for r in seg.entity_refs_json}
+        for ref in entity_refs:
+            key = (ref["type"], ref["name"])
+            if key not in existing:
+                existing.add(key)
+        merged_refs = list(seg.entity_refs_json) + [
+            ref for ref in entity_refs
+            if (ref["type"], ref["name"]) not in {(r["type"], r["name"]) for r in seg.entity_refs_json}
+        ]
+        changes["entity_refs_json"] = merged_refs
+
+    # Extract semantic role
+    role = result.get("semantic_role", "")
+    if role and role in _SCHEMA_SEMANTIC_ROLES and role != seg.semantic_role:
+        changes["semantic_role"] = role
+
+    # Extract document type hint
+    doc_type = result.get("document_type", "")
+    meta = dict(seg.metadata_json)
+    if doc_type:
+        meta["llm_document_type"] = doc_type
+
+    if changes or meta != dict(seg.metadata_json):
+        changes["metadata_json"] = meta
+
+    if not changes:
+        return seg
+
+    return RawSegmentData(
+        document_key=seg.document_key,
+        segment_index=seg.segment_index,
+        block_type=seg.block_type,
+        semantic_role=changes.get("semantic_role", seg.semantic_role),
+        section_path=seg.section_path,
+        section_title=seg.section_title,
+        raw_text=seg.raw_text,
+        normalized_text=seg.normalized_text,
+        content_hash=seg.content_hash,
+        normalized_hash=seg.normalized_hash,
+        token_count=seg.token_count,
+        structure_json=seg.structure_json,
+        source_offsets_json=seg.source_offsets_json,
+        entity_refs_json=changes.get("entity_refs_json", seg.entity_refs_json),
+        metadata_json=changes.get("metadata_json", seg.metadata_json),
+    )
+
+
 def _enrich_one(
     seg: RawSegmentData,
     extractor: EntityExtractor,
