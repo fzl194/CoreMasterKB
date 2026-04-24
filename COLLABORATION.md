@@ -1,6 +1,6 @@
 # GitHub 协作开发指南（Branch 模式）
 
-> 本文档面向项目新成员，说明如何参与 CoreMasterKB 的协同开发。
+> 本文档面向项目全体成员。管理员看"〇、管理员初始设置"，新成员看"一、初始设置"起。
 
 ---
 
@@ -20,7 +20,37 @@
 
 ---
 
-## 一、初始设置（只做一次）
+## 〇、管理员初始设置（只做一次）
+
+以下操作由管理员在 GitHub 网页上完成，新成员无需操作。
+
+### 1. 邀请协作者
+
+1. 打开仓库页面 → **Settings** → **Collaborators** → **Add people**
+2. 输入对方的 GitHub 用户名，选择 **Write** 权限，发送邀请
+3. 对方邮箱会收到邀请，点击 Accept 接受
+4. 两名成员都邀请完
+
+### 2. 保护 master 分支
+
+1. **Settings** → **Branches** → **Add branch protection rule**
+2. Branch name pattern 填 `master`
+3. 勾选：
+   - **Require a pull request before merging**
+   - **Require approvals** → 填 1
+4. 点击 **Create**
+
+设置后，任何人（包括管理员自己）都不能直接 push 到 master，必须通过 PR 合并。
+
+### 3. 日常职责
+
+- 收到 PR 通知后，在 PR 页面审查代码（查看 Files changed）
+- 有问题就在代码行上留 Comment，要求修改
+- 没问题就 Approve，然后点击 **Squash and merge** 合并（保持 master 历史干净）
+
+---
+
+## 一、新成员初始设置（只做一次）
 
 ### 1. 接受邀请
 
