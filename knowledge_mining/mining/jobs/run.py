@@ -51,6 +51,7 @@ def run(
     phase1_only: bool = False,
     publish_on_partial_failure: bool = False,
     llm_base_url: str | None = None,
+    llm_bypass_proxy: bool = False,
 ) -> dict[str, Any]:
     """Execute the mining pipeline.
 
@@ -63,6 +64,7 @@ def run(
         publish_on_partial_failure: If True, publish even when some docs failed.
             Default False: partial failures block active release, run marked "completed_with_errors".
         llm_base_url: LLM service URL (e.g. "http://localhost:8900"). None = no LLM.
+        llm_bypass_proxy: If True, bypass system proxy for LLM calls (for corporate networks).
 
     Returns:
         Summary dict with run_id, counts, and status.
@@ -81,7 +83,7 @@ def run(
     run_id = uuid.uuid4().hex
 
     # LLM integration: create question generator if URL provided
-    question_generator = _init_llm(llm_base_url)
+    question_generator = _init_llm(llm_base_url, llm_bypass_proxy)
 
     try:
         return _run_pipeline(
@@ -146,7 +148,7 @@ def publish(
 # Internal pipeline implementation
 # ===================================================================
 
-def _init_llm(llm_base_url: str | None) -> Any:
+def _init_llm(llm_base_url: str | None, bypass_proxy: bool = False) -> Any:
     """Initialize LLM question generator if URL provided.
 
     Registers template if llm_service is reachable.
@@ -159,7 +161,7 @@ def _init_llm(llm_base_url: str | None) -> Any:
     from knowledge_mining.mining.llm_templates import TEMPLATES
     from knowledge_mining.mining.retrieval_units import LlmQuestionGenerator
 
-    client = LlmClient(base_url=llm_base_url)
+    client = LlmClient(base_url=llm_base_url, bypass_proxy=bypass_proxy)
     if not client.health_check():
         logger.warning("LLM service at %s unreachable, proceeding without LLM", llm_base_url)
         return None
@@ -168,7 +170,7 @@ def _init_llm(llm_base_url: str | None) -> Any:
     for tpl in TEMPLATES:
         client.register_template(tpl)
 
-    return LlmQuestionGenerator(base_url=llm_base_url)
+    return LlmQuestionGenerator(base_url=llm_base_url, bypass_proxy=bypass_proxy)
 
 
 def _run_pipeline(

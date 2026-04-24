@@ -51,9 +51,9 @@ class LlmQuestionGenerator:
     Worker concurrency handles parallelism on the server side.
     """
 
-    def __init__(self, base_url: str = "http://localhost:8900", timeout: int = 120) -> None:
+    def __init__(self, base_url: str = "http://localhost:8900", timeout: int = 120, bypass_proxy: bool = False) -> None:
         from knowledge_mining.mining.llm_client import LlmClient
-        self._client = LlmClient(base_url=base_url)
+        self._client = LlmClient(base_url=base_url, bypass_proxy=bypass_proxy)
         self._timeout = timeout
 
     def generate(self, segment: RawSegmentData) -> list[str]:

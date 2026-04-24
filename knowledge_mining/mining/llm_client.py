@@ -23,9 +23,15 @@ DEFAULT_BASE_URL = "http://localhost:8900"
 class LlmClient:
     """Sync HTTP client for llm_service. Field names match llm_service/client.py."""
 
-    def __init__(self, base_url: str = DEFAULT_BASE_URL, timeout: int = 60) -> None:
+    def __init__(self, base_url: str = DEFAULT_BASE_URL, timeout: int = 60, bypass_proxy: bool = False) -> None:
         self._base_url = base_url.rstrip("/")
         self._timeout = timeout
+        self._bypass_proxy = bypass_proxy
+
+    def _make_client(self, timeout: int | None = None) -> httpx.Client:
+        """Create httpx.Client with optional proxy bypass."""
+        transport = httpx.HTTPTransport() if self._bypass_proxy else None
+        return httpx.Client(transport=transport, timeout=timeout or self._timeout)
 
     def submit_task(
         self,
@@ -52,7 +58,7 @@ class LlmClient:
             payload["metadata"] = metadata
 
         try:
-            with httpx.Client(timeout=self._timeout) as client:
+            with self._make_client() as client:
                 resp = client.post(f"{self._base_url}/api/v1/tasks", json=payload)
                 resp.raise_for_status()
                 return resp.json().get("task_id")
@@ -68,7 +74,7 @@ class LlmClient:
         Polls GET /api/v1/tasks/{id} for status, then GET /tasks/{id}/result for output.
         """
         deadline = time.time() + timeout
-        with httpx.Client(timeout=self._timeout) as client:
+        with self._make_client() as client:
             while time.time() < deadline:
                 try:
                     # Check task status
@@ -130,7 +136,7 @@ class LlmClient:
             payload["expected_output_type"] = expected_output_type
 
         try:
-            with httpx.Client(timeout=self._timeout) as client:
+            with self._make_client() as client:
                 resp = client.post(f"{self._base_url}/api/v1/execute", json=payload)
                 resp.raise_for_status()
                 return resp.json()
@@ -141,7 +147,7 @@ class LlmClient:
     def register_template(self, template: dict[str, Any]) -> bool:
         """Idempotent template registration via POST /api/v1/templates."""
         try:
-            with httpx.Client(timeout=self._timeout) as client:
+            with self._make_client() as client:
                 resp = client.post(f"{self._base_url}/api/v1/templates", json=template)
                 return resp.status_code in (200, 201)
         except Exception as e:
@@ -151,7 +157,7 @@ class LlmClient:
     def health_check(self) -> bool:
         """Quick health check. Returns True if llm_service is reachable."""
         try:
-            with httpx.Client(timeout=5) as client:
+            with self._make_client(timeout=5) as client:
                 resp = client.get(f"{self._base_url}/health")
                 return resp.status_code == 200
         except Exception:
