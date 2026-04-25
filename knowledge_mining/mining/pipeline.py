@@ -93,6 +93,9 @@ class PipelineConfig:
     enricher: Any | None = None  # Enricher Protocol
     relation_builder: RelationBuilder | None = None
     question_generator: Any | None = None  # QuestionGenerator Protocol
+    embedding_generator: Any | None = None  # EmbeddingGenerator Protocol
+    discourse_relation_builder: Any | None = None  # DiscourseRelationBuilder
+    contextualizer: Any | None = None  # Contextualizer Protocol
 
 
 # ---------------------------------------------------------------------------
@@ -172,6 +175,16 @@ class MiningPipeline:
                 seg_ids=seg_ids,
             )
 
+        # Stage 4b: Build discourse relations (LLM-driven RST analysis)
+        drb = cfg.discourse_relation_builder
+        if drb is not None and ctx.segments and ctx.seg_ids:
+            if stage_callback:
+                stage_callback("discourse_relations", ctx)
+            extra_relations = drb.build(list(ctx.segments), seg_ids=ctx.seg_ids)
+            if extra_relations:
+                all_relations = list(ctx.relations) + extra_relations
+                ctx = ctx.with_updates(relations=tuple(all_relations))
+
         # Stage 5: Build retrieval units
         if stage_callback:
             stage_callback("build_retrieval_units", ctx)
@@ -182,6 +195,7 @@ class MiningPipeline:
                 seg_ids=ctx.seg_ids,
                 document_key=profile.document_key if profile else "",
                 question_generator=cfg.question_generator,
+                contextualizer=cfg.contextualizer,
             )
             ctx = ctx.with_updates(retrieval_units=tuple(units))
 

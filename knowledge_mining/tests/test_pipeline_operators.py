@@ -1,6 +1,8 @@
-"""Tests for mining pipeline bug fixes (Phase 1) and hot-pluggable architecture (Phase 2)."""
+"""Tests for mining pipeline bug fixes (Phase 1), hot-pluggable architecture (Phase 2),
+and new operators (Wave 1-7: Embedding, Discourse Relations, Contextual Retrieval, etc.)."""
 from __future__ import annotations
 
+import json
 import pytest
 
 from knowledge_mining.mining.models import (
@@ -619,3 +621,500 @@ def _collect_blocks(node: SectionNode) -> list[ContentBlock]:
     for child in node.children:
         blocks.extend(_collect_blocks(child))
     return blocks
+
+
+# ===================================================================
+# Wave 1: EmbeddingGenerator Tests
+# ===================================================================
+
+class TestZhipuEmbeddingGenerator:
+    """ZhipuEmbeddingGenerator should call Zhipu API and return embeddings."""
+
+    def test_embed_single_text(self):
+        from knowledge_mining.mining.embedding import ZhipuEmbeddingGenerator
+        from unittest.mock import patch, MagicMock
+
+        gen = ZhipuEmbeddingGenerator(api_key="test-key", dimensions=2048)
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "data": [{"embedding": [0.1, 0.2, 0.3], "index": 0}]
+        }
+        mock_response.raise_for_status = MagicMock()
+
+        with patch("httpx.Client") as mock_client_cls:
+            mock_client = MagicMock()
+            mock_client.__enter__ = MagicMock(return_value=mock_client)
+            mock_client.__exit__ = MagicMock(return_value=False)
+            mock_client.post.return_value = mock_response
+            mock_client_cls.return_value = mock_client
+
+            result = gen.embed(["test text"])
+            assert len(result) == 1
+            assert result[0] == [0.1, 0.2, 0.3]
+
+    def test_embed_empty_input(self):
+        from knowledge_mining.mining.embedding import ZhipuEmbeddingGenerator
+
+        gen = ZhipuEmbeddingGenerator(api_key="test-key")
+        assert gen.embed([]) == []
+
+    def test_embed_api_failure_returns_empty(self):
+        from knowledge_mining.mining.embedding import ZhipuEmbeddingGenerator
+        from unittest.mock import patch, MagicMock
+
+        gen = ZhipuEmbeddingGenerator(api_key="test-key")
+
+        with patch("httpx.Client") as mock_client_cls:
+            mock_client = MagicMock()
+            mock_client.__enter__ = MagicMock(return_value=mock_client)
+            mock_client.__exit__ = MagicMock(return_value=False)
+            mock_client.post.side_effect = Exception("API error")
+            mock_client_cls.return_value = mock_client
+
+            result = gen.embed(["test"])
+            assert result == []
+
+    def test_embed_batch(self):
+        from knowledge_mining.mining.embedding import ZhipuEmbeddingGenerator
+        from unittest.mock import patch, MagicMock
+
+        gen = ZhipuEmbeddingGenerator(api_key="test-key")
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "data": [
+                {"embedding": [0.1, 0.2], "index": 0},
+                {"embedding": [0.3, 0.4], "index": 1},
+            ]
+        }
+        mock_response.raise_for_status = MagicMock()
+
+        with patch("httpx.Client") as mock_client_cls:
+            mock_client = MagicMock()
+            mock_client.__enter__ = MagicMock(return_value=mock_client)
+            mock_client.__exit__ = MagicMock(return_value=False)
+            mock_client.post.return_value = mock_response
+            mock_client_cls.return_value = mock_client
+
+            result = gen.embed_batch(["text1", "text2"], batch_size=10)
+            assert len(result) == 2
+
+    def test_noop_embedding_generator(self):
+        from knowledge_mining.mining.embedding import NoOpEmbeddingGenerator
+
+        gen = NoOpEmbeddingGenerator()
+        assert gen.embed(["test"]) == []
+        assert gen.embed_batch(["test"]) == []
+
+    def test_properties(self):
+        from knowledge_mining.mining.embedding import ZhipuEmbeddingGenerator
+
+        gen = ZhipuEmbeddingGenerator(api_key="test-key", model="embedding-3", dimensions=1024)
+        assert gen.model_name == "embedding-3"
+        assert gen.dimensions == 1024
+
+
+# ===================================================================
+# Wave 2: DiscourseRelationBuilder Tests
+# ===================================================================
+
+class TestDiscourseRelationBuilder:
+    """DiscourseRelationBuilder should analyze segment discourse relations via LLM."""
+
+    def test_parse_llm_results(self):
+        from knowledge_mining.mining.relations import DiscourseRelationBuilder
+
+        builder = DiscourseRelationBuilder.__new__(DiscourseRelationBuilder)
+        builder._client = None
+        builder._timeout = 60
+        builder._window_size = 15
+
+        segments = [
+            RawSegmentData(document_key="doc:/test.md", segment_index=0, raw_text="First segment about config."),
+            RawSegmentData(document_key="doc:/test.md", segment_index=1, raw_text="Second segment about results."),
+            RawSegmentData(document_key="doc:/test.md", segment_index=2, raw_text="Third segment about testing."),
+        ]
+
+        llm_output = [
+            {"source": 0, "target": 1, "relation": "ELABORATES", "confidence": 0.9},
+            {"source": 1, "target": 2, "relation": "RESULTS_IN", "confidence": 0.7},
+        ]
+
+        relations = builder._parse_llm_results(llm_output, segments)
+        assert len(relations) == 2
+
+        assert relations[0].relation_type == "elaborates"
+        assert relations[0].weight == 0.9
+        assert relations[0].metadata_json["source"] == "discourse_llm"
+
+        assert relations[1].relation_type == "results_in"
+
+    def test_unrelated_filtered_out(self):
+        from knowledge_mining.mining.relations import DiscourseRelationBuilder
+
+        builder = DiscourseRelationBuilder.__new__(DiscourseRelationBuilder)
+        builder._client = None
+
+        segments = [
+            RawSegmentData(document_key="doc:/test.md", segment_index=0, raw_text="A"),
+            RawSegmentData(document_key="doc:/test.md", segment_index=1, raw_text="B"),
+        ]
+
+        llm_output = [
+            {"source": 0, "target": 1, "relation": "UNRELATED", "confidence": 0.3},
+            {"source": 0, "target": 1, "relation": "ELABORATES", "confidence": 0.8},
+        ]
+
+        relations = builder._parse_llm_results(llm_output, segments)
+        assert len(relations) == 1
+        assert relations[0].relation_type == "elaborates"
+
+    def test_out_of_range_index_skipped(self):
+        from knowledge_mining.mining.relations import DiscourseRelationBuilder
+
+        builder = DiscourseRelationBuilder.__new__(DiscourseRelationBuilder)
+        builder._client = None
+
+        segments = [RawSegmentData(document_key="doc:/test.md", segment_index=0, raw_text="A")]
+
+        llm_output = [
+            {"source": 0, "target": 5, "relation": "ELABORATES", "confidence": 0.9},
+        ]
+
+        relations = builder._parse_llm_results(llm_output, segments)
+        assert len(relations) == 0
+
+    def test_build_with_too_few_segments(self):
+        from knowledge_mining.mining.relations import DiscourseRelationBuilder
+
+        builder = DiscourseRelationBuilder.__new__(DiscourseRelationBuilder)
+        builder._client = None
+        builder._timeout = 60
+        builder._window_size = 15
+
+        segments = [RawSegmentData(document_key="doc:/test.md", segment_index=0, raw_text="Only one")]
+        result = builder.build(segments)
+        assert result == []
+
+
+# ===================================================================
+# Wave 3: ContextualRetriever Tests
+# ===================================================================
+
+class TestContextualizer:
+    """Contextualizer should generate context descriptions for segments."""
+
+    def test_noop_contextualizer(self):
+        from knowledge_mining.mining.retrieval_units import NoOpContextualizer
+
+        ctxer = NoOpContextualizer()
+        segments = [RawSegmentData(document_key="doc:/test.md", segment_index=0, raw_text="test")]
+        assert ctxer.contextualize(segments, "doc text") == {}
+
+    def test_contextual_enhanced_unit_creation(self):
+        from knowledge_mining.mining.retrieval_units import _make_contextual_enhanced_unit
+
+        seg = RawSegmentData(
+            document_key="doc:/test.md",
+            segment_index=1,
+            block_type="paragraph",
+            raw_text="APN配置需要设置正确的参数。",
+            section_title="APN配置",
+            section_path=[{"title": "APN配置", "level": 2}],
+        )
+
+        unit = _make_contextual_enhanced_unit(seg, "本段介绍APN的基本配置步骤")
+        assert unit.unit_type == "contextual_text"
+        assert unit.weight == 0.9
+        assert "本段介绍APN的基本配置步骤" in unit.text
+        assert "APN配置需要设置正确的参数" in unit.text
+        assert unit.metadata_json["context_description"] == "本段介绍APN的基本配置步骤"
+
+    def test_contextualizer_in_build_retrieval_units(self):
+        from knowledge_mining.mining.retrieval_units import build_retrieval_units
+
+        segments = [
+            RawSegmentData(
+                document_key="doc:/test.md",
+                segment_index=0,
+                block_type="paragraph",
+                raw_text="This is a test paragraph.",
+            ),
+        ]
+
+        class MockContextualizer:
+            def contextualize(self, segments, document_text):
+                return {f"{s.document_key}#{s.segment_index}": "Test context" for s in segments}
+
+        units = build_retrieval_units(
+            segments,
+            document_key="doc:/test.md",
+            contextualizer=MockContextualizer(),
+        )
+
+        enhanced = [u for u in units if u.unit_key.endswith(":contextual_enhanced")]
+        assert len(enhanced) == 1
+        assert "Test context" in enhanced[0].text
+
+
+# ===================================================================
+# Wave 4-5: validate_build + REMOVE semantics Tests
+# ===================================================================
+
+class TestValidateBuild:
+    """validate_build should check active snapshots, segments, and parent build."""
+
+    def test_validate_build_no_active_snapshots(self):
+        from knowledge_mining.mining.publishing import validate_build
+        from knowledge_mining.mining.db import AssetCoreDB
+        from unittest.mock import MagicMock
+
+        db = MagicMock(spec=AssetCoreDB)
+        db.get_build.return_value = {"build_mode": "full", "parent_build_id": None}
+        db.get_build_snapshots.return_value = []
+
+        with pytest.raises(ValueError, match="no active snapshots"):
+            validate_build(db, "build-1")
+
+    def test_validate_build_empty_snapshot(self):
+        from knowledge_mining.mining.publishing import validate_build
+        from knowledge_mining.mining.db import AssetCoreDB
+        from unittest.mock import MagicMock
+
+        db = MagicMock(spec=AssetCoreDB)
+        db.get_build.return_value = {"build_mode": "full", "parent_build_id": None}
+        db.get_build_snapshots.return_value = [
+            {"selection_status": "active", "document_snapshot_id": "snap-1"},
+        ]
+        db.count_segments_by_snapshot.return_value = 0
+
+        with pytest.raises(ValueError, match="no segments"):
+            validate_build(db, "build-1")
+
+    def test_validate_build_incremental_missing_parent(self):
+        from knowledge_mining.mining.publishing import validate_build
+        from knowledge_mining.mining.db import AssetCoreDB
+        from unittest.mock import MagicMock
+
+        db = MagicMock(spec=AssetCoreDB)
+        db.get_build.return_value = {
+            "build_mode": "incremental",
+            "parent_build_id": "parent-missing",
+        }
+        db.get_build.return_value = {
+            "build_mode": "incremental",
+            "parent_build_id": "parent-missing",
+        }
+
+        # First call for the build itself
+        build_data = {
+            "build_mode": "incremental",
+            "parent_build_id": "parent-missing",
+        }
+        db.get_build.side_effect = [build_data, None]  # build found, parent not
+
+        with pytest.raises(ValueError, match="missing parent"):
+            validate_build(db, "build-1")
+
+    def test_validate_build_passes(self):
+        from knowledge_mining.mining.publishing import validate_build
+        from knowledge_mining.mining.db import AssetCoreDB
+        from unittest.mock import MagicMock
+
+        db = MagicMock(spec=AssetCoreDB)
+        db.get_build.return_value = {"build_mode": "full", "parent_build_id": None}
+        db.get_build_snapshots.return_value = [
+            {"selection_status": "active", "document_snapshot_id": "snap-1"},
+        ]
+        db.count_segments_by_snapshot.return_value = 5
+
+        # Should not raise
+        validate_build(db, "build-1")
+
+
+class TestRemoveSemantics:
+    """classify_documents should detect REMOVE for deleted files."""
+
+    def test_removed_document_detected(self):
+        from knowledge_mining.mining.publishing import classify_documents
+        from knowledge_mining.mining.db import AssetCoreDB
+        from unittest.mock import MagicMock
+
+        db = MagicMock(spec=AssetCoreDB)
+        db.get_active_build.return_value = {"id": "prev-build-1"}
+        db.get_build_snapshots.return_value = [
+            {"document_id": "doc-1", "document_snapshot_id": "snap-1"},
+            {"document_id": "doc-2", "document_snapshot_id": "snap-2"},
+        ]
+
+        # Current run only has doc-1, doc-2 was deleted
+        decisions = [
+            {"document_id": "doc-1", "document_snapshot_id": "snap-1-new"},
+        ]
+
+        result = classify_documents(db, decisions)
+        remove_decisions = [d for d in result if d.get("action") == "REMOVE"]
+        assert len(remove_decisions) == 1
+        assert remove_decisions[0]["document_id"] == "doc-2"
+        assert remove_decisions[0]["selection_status"] == "removed"
+
+
+# ===================================================================
+# Wave 6: Counting Tests
+# ===================================================================
+
+class TestRunCounting:
+    """run() should track new_count and updated_count separately."""
+
+    def test_pipeline_config_accepts_new_operators(self):
+        from knowledge_mining.mining.pipeline import PipelineConfig
+
+        config = PipelineConfig(
+            embedding_generator=None,
+            discourse_relation_builder=None,
+            contextualizer=None,
+        )
+        assert config.embedding_generator is None
+        assert config.discourse_relation_builder is None
+        assert config.contextualizer is None
+
+
+# ===================================================================
+# Wave 7: html_table Structure Extraction Tests
+# ===================================================================
+
+class TestHtmlTableExtraction:
+    """html_table blocks should have columns/rows structure extracted."""
+
+    def test_html_table_structure(self):
+        from knowledge_mining.mining.structure import _parse_html_table
+
+        html = """<table>
+        <thead><tr><th>参数</th><th>值</th><th>说明</th></tr></thead>
+        <tbody>
+            <tr><td>APN</td><td>cmnet</td><td>接入点名称</td></tr>
+            <tr><td>Auth</td><td>PAP</td><td>认证方式</td></tr>
+        </tbody>
+        </table>"""
+
+        structure = _parse_html_table(html)
+        assert structure["kind"] == "html_table"
+        assert structure["columns"] == ["参数", "值", "说明"]
+        assert len(structure["rows"]) == 2
+        assert structure["rows"][0]["参数"] == "APN"
+        assert structure["rows"][1]["说明"] == "认证方式"
+        assert structure["row_count"] == 2
+        assert structure["col_count"] == 3
+
+    def test_html_table_no_header(self):
+        from knowledge_mining.mining.structure import _parse_html_table
+
+        html = """<table>
+        <tr><td>A</td><td>B</td></tr>
+        <tr><td>C</td><td>D</td></tr>
+        </table>"""
+
+        structure = _parse_html_table(html)
+        assert structure["col_count"] == 0  # no thead
+        assert structure["row_count"] == 2
+
+    def test_html_table_in_structure_parser(self):
+        from knowledge_mining.mining.structure import parse_structure
+
+        md = """# Test
+
+<table>
+<thead><tr><th>Col1</th><th>Col2</th></tr></thead>
+<tbody><tr><td>Val1</td><td>Val2</td></tr></tbody>
+</table>
+"""
+
+        tree = parse_structure(md)
+        blocks = _collect_blocks(tree)
+        html_tables = [b for b in blocks if b.block_type == "html_table"]
+        assert len(html_tables) == 1
+
+        struct = html_tables[0].structure
+        assert struct is not None
+        assert struct["kind"] == "html_table"
+        assert struct["columns"] == ["Col1", "Col2"]
+
+
+# ===================================================================
+# Wave 2: RST Relation Types in Models
+# ===================================================================
+
+class TestRstRelationTypes:
+    """VALID_RELATION_TYPES should include RST discourse labels."""
+
+    def test_rst_labels_present(self):
+        from knowledge_mining.mining.models import VALID_RELATION_TYPES
+
+        rst_labels = {
+            "evidences", "causes", "results_in", "backgrounds",
+            "conditions", "summarizes", "justifies", "enables",
+            "contrasts_with", "parallels", "sequences", "unrelated",
+        }
+        for label in rst_labels:
+            assert label in VALID_RELATION_TYPES, f"{label} missing from VALID_RELATION_TYPES"
+
+    def test_structural_labels_still_present(self):
+        from knowledge_mining.mining.models import VALID_RELATION_TYPES
+
+        structural = {"previous", "next", "same_section", "same_parent_section", "section_header_of"}
+        for label in structural:
+            assert label in VALID_RELATION_TYPES
+
+    def test_discourse_relations_stage_name(self):
+        from knowledge_mining.mining.models import VALID_STAGE_NAMES
+
+        assert "discourse_relations" in VALID_STAGE_NAMES
+
+
+# ===================================================================
+# Wave 1-3: DB embedding write test
+# ===================================================================
+
+class TestDBEmbeddingWrite:
+    """AssetCoreDB should support embedding insertion."""
+
+    def test_insert_retrieval_embedding(self):
+        from knowledge_mining.mining.db import AssetCoreDB
+        import tempfile, os
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = os.path.join(tmpdir, "test.sqlite")
+            db = AssetCoreDB(db_path)
+            db.open()
+
+            # Create prerequisite data: batch -> document -> snapshot -> link -> segment -> retrieval unit
+            db.upsert_source_batch("batch-1", "B-TEST", "folder_scan")
+            doc_id = db.upsert_document("doc-1", "doc:/test.md", "test.md")
+            db.upsert_snapshot("snap-1", "nh1", "rh1", "text/markdown", title="Test")
+            db.insert_snapshot_link("link-1", doc_id, "snap-1", "batch-1", "test.md", "file:///test.md")
+            db.insert_raw_segment("seg-1", "snap-1", "doc:/test.md#0", 0, raw_text="test segment")
+            db.insert_retrieval_unit("ru-1", "snap-1", "ru:test:raw_text", "raw_text", "raw_segment", text="test unit")
+
+            # Insert embedding
+            vec = json.dumps([0.1, 0.2, 0.3])
+            db.insert_retrieval_embedding(
+                embedding_id="emb-1",
+                retrieval_unit_id="ru-1",
+                embedding_model="embedding-3",
+                embedding_provider="zhipu",
+                text_kind="full",
+                embedding_dim=3,
+                embedding_vector=vec,
+            )
+            db.commit()
+
+            # Verify
+            row = db._fetchone("SELECT * FROM asset_retrieval_embeddings WHERE id = ?", ("emb-1",))
+            assert row is not None
+            assert row["embedding_model"] == "embedding-3"
+            assert row["embedding_dim"] == 3
+            assert row["embedding_provider"] == "zhipu"
+
+            db.close()
+

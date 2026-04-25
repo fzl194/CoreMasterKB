@@ -4,9 +4,12 @@ Key design:
 - Single parent-child hierarchy, no duplicate content
 - Table structure preserved in ContentBlock.structure as {columns, rows}
 - ContentBlock carries line_start/line_end from markdown-it token.map
+- html_table blocks extracted with columns/rows via html.parser
 """
 from __future__ import annotations
 
+import re
+from html.parser import HTMLParser
 from typing import Any
 
 from markdown_it import MarkdownIt
@@ -117,9 +120,11 @@ def _tokens_to_blocks(tokens: list) -> list[ContentBlock]:
             line_start = tok.map[0] if tok.map else None
             line_end = tok.map[1] if tok.map else None
             if "<table" in html_text.lower():
+                structure = _parse_html_table(html_text)
                 blocks.append(ContentBlock(
                     block_type="html_table", text=html_text,
                     line_start=line_start, line_end=line_end,
+                    structure=structure,
                 ))
             else:
                 blocks.append(ContentBlock(
@@ -351,3 +356,71 @@ def _split_sub_sections(
         result.append(current)
 
     return result
+
+
+class _HtmlTableParser(HTMLParser):
+    """Minimal HTML table parser to extract columns and rows."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.columns: list[str] = []
+        self.rows: list[dict[str, str]] = []
+        self._in_thead = False
+        self._in_cell = False
+        self._current_row: list[str] = []
+        self._cell_text = ""
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag in ("thead",):
+            self._in_thead = True
+        elif tag in ("tbody",):
+            self._in_thead = False
+        elif tag in ("th", "td"):
+            self._in_cell = True
+            self._cell_text = ""
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in ("thead",):
+            self._in_thead = False
+        elif tag in ("th", "td"):
+            self._in_cell = False
+            self._current_row.append(self._cell_text.strip())
+        elif tag == "tr":
+            if self._current_row:
+                if self._in_thead and not self.columns:
+                    self.columns = list(self._current_row)
+                else:
+                    if self.columns:
+                        row_dict = {
+                            self.columns[j]: cell
+                            for j, cell in enumerate(self._current_row)
+                            if j < len(self.columns)
+                        }
+                    else:
+                        row_dict = {f"col{j}": cell for j, cell in enumerate(self._current_row)}
+                    self.rows.append(row_dict)
+                self._current_row = []
+
+    def handle_data(self, data: str) -> None:
+        if self._in_cell:
+            self._cell_text += data
+
+
+def _parse_html_table(html_text: str) -> dict[str, Any]:
+    """Extract columns/rows structure from HTML table text."""
+    parser = _HtmlTableParser()
+    try:
+        parser.feed(html_text)
+    except Exception:
+        pass
+
+    col_count = len(parser.columns)
+    row_count = len(parser.rows)
+
+    return {
+        "kind": "html_table",
+        "columns": parser.columns,
+        "rows": parser.rows,
+        "row_count": row_count,
+        "col_count": col_count,
+    }

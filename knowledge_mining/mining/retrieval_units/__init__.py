@@ -5,20 +5,25 @@ v1.2 produces:
 - contextual_text: segment with section heading context prepended
 - entity_card: enriched with entity context from raw_text
 - generated_question: LLM-generated via LlmQuestionGenerator
+- contextual_enhanced: LLM-generated context description prepended to text
 
 v1.2 changes:
 - source_segment_id strong bridge to raw_segment
 - jieba pre-tokenization for search_text (FTS5 Chinese support)
 - entity_card content enrichment with surrounding context
 - LlmQuestionGenerator backed by llm_service
+- LLMContextualizer for Anthropic-style contextual retrieval
 """
 from __future__ import annotations
 
+import logging
 import uuid
 from typing import Any, Protocol, runtime_checkable
 
 from knowledge_mining.mining.models import RawSegmentData, RetrievalUnitData
 from knowledge_mining.mining.text_utils import tokenize_for_search
+
+logger = logging.getLogger(__name__)
 
 
 @runtime_checkable
@@ -31,6 +36,15 @@ class QuestionGenerator(Protocol):
 
     def generate_batch(self, segments: list[RawSegmentData]) -> dict[str, list[str]]:
         """Return {segment_key: [questions]} for all segments. Default: call generate per segment."""
+        ...
+
+
+@runtime_checkable
+class Contextualizer(Protocol):
+    """Protocol for generating contextual descriptions for segments."""
+
+    def contextualize(self, segments: list[RawSegmentData], document_text: str) -> dict[str, str]:
+        """Return {segment_key: context_description} for segments."""
         ...
 
 
@@ -47,7 +61,7 @@ class NoOpQuestionGenerator:
 class LlmQuestionGenerator:
     """v1.2: LLM-backed question generation via llm_service HTTP API.
 
-    Batch async: submit_all → poll_all → return results.
+    Batch async: submit_all -> poll_all -> return results.
     Worker concurrency handles parallelism on the server side.
     """
 
@@ -119,12 +133,80 @@ class LlmQuestionGenerator:
         return results
 
 
+class NoOpContextualizer:
+    """Fallback: returns empty context descriptions."""
+
+    def contextualize(self, segments: list[RawSegmentData], document_text: str) -> dict[str, str]:
+        return {}
+
+
+class LLMContextualizer:
+    """v1.2: Anthropic-style contextual retrieval via LLM.
+
+    For each segment, generates a brief context description explaining
+    its position and role in the full document.
+    """
+
+    def __init__(self, base_url: str = "http://localhost:8900", timeout: int = 120, bypass_proxy: bool = False) -> None:
+        from knowledge_mining.mining.llm_client import LlmClient
+        self._client = LlmClient(base_url=base_url, bypass_proxy=bypass_proxy)
+        self._timeout = timeout
+
+    def contextualize(self, segments: list[RawSegmentData], document_text: str) -> dict[str, str]:
+        """Generate context descriptions for all segments via LLM.
+
+        Returns {segment_key: context_description}.
+        """
+        if not segments:
+            return {}
+
+        results: dict[str, str] = {}
+
+        # Batch: submit all, poll all
+        seg_tasks: dict[str, str] = {}
+        for seg in segments:
+            if not seg.raw_text.strip():
+                continue
+            seg_key = f"{seg.document_key}#{seg.segment_index}"
+            doc_preview = document_text[:2000] if len(document_text) > 2000 else document_text
+            task_id = self._client.submit_task(
+                template_key="mining-contextual-retrieval",
+                input={
+                    "document": doc_preview,
+                    "segment": seg.raw_text[:500],
+                },
+                caller_domain="mining",
+                pipeline_stage="contextual_retrieval",
+                expected_output_type="json_object",
+            )
+            if task_id:
+                seg_tasks[seg_key] = task_id
+
+        for seg_key, task_id in seg_tasks.items():
+            try:
+                items = self._client.poll_result(task_id, timeout=self._timeout)
+                if items and isinstance(items, list):
+                    item = items[0] if items else {}
+                elif items and isinstance(items, dict):
+                    item = items
+                else:
+                    continue
+                context = item.get("context", "")
+                if context:
+                    results[seg_key] = context
+            except Exception:
+                continue
+
+        return results
+
+
 def build_retrieval_units(
     segments: list[RawSegmentData],
     *,
     seg_ids: dict[str, str] | None = None,
     document_key: str = "",
     question_generator: QuestionGenerator | None = None,
+    contextualizer: Contextualizer | None = None,
 ) -> list[RetrievalUnitData]:
     """Build retrieval units from segments.
 
@@ -133,19 +215,32 @@ def build_retrieval_units(
         seg_ids: Map of segment_key -> segment UUID (from build_relations).
         document_key: Document key for unit naming.
         question_generator: Optional question generator (LLM-backed or NoOp).
+        contextualizer: Optional contextualizer for enhanced retrieval (LLM-backed or NoOp).
     """
     if not segments:
         return []
 
     qgen = question_generator or NoOpQuestionGenerator()
+    ctxer = contextualizer or NoOpContextualizer()
     units: list[RetrievalUnitData] = []
     seen_entity_cards: set[str] = set()
 
-    # Phase 1: Batch-generate all questions (submit all → poll all)
+    # Phase 1: Batch-generate all questions (submit all -> poll all)
     question_map: dict[str, list[str]] = {}
     if qgen is not None:
         questionworthy = [s for s in segments if _is_questionworthy(s)]
         question_map = qgen.generate_batch(questionworthy)
+
+    # Phase 1b: Batch-generate contextual descriptions
+    context_map: dict[str, str] = {}
+    document_text = "\n".join(s.raw_text for s in segments)
+    try:
+        context_map = ctxer.contextualize(
+            [s for s in segments if s.raw_text.strip()],
+            document_text,
+        )
+    except Exception as e:
+        logger.warning("Contextualization failed: %s", e)
 
     # Phase 2: Build units for each segment
     for seg in segments:
@@ -175,6 +270,12 @@ def build_retrieval_units(
         questions = question_map.get(seg_key, [])
         for qi, question in enumerate(questions):
             units.append(_make_generated_question_unit(seg, question, qi, source_seg_id))
+
+        # 5. contextual_enhanced unit (LLM-generated context prepended to text)
+        if seg_key in context_map:
+            ctx_desc = context_map[seg_key]
+            if ctx_desc:
+                units.append(_make_contextual_enhanced_unit(seg, ctx_desc, source_seg_id))
 
     return units
 
@@ -507,3 +608,44 @@ def _build_source_refs(seg: RawSegmentData) -> dict[str, Any]:
     if seg.source_offsets_json:
         refs["offsets"] = seg.source_offsets_json
     return refs
+
+
+def _make_contextual_enhanced_unit(
+    seg: RawSegmentData,
+    context_description: str,
+    source_seg_id: str | None = None,
+) -> RetrievalUnitData:
+    """Contextual-enhanced unit: LLM-generated context prepended to segment text.
+
+    Uses Anthropic-style contextual retrieval where a brief context description
+    is prepended to the raw text for improved retrieval accuracy.
+    """
+    enhanced_text = f"[{context_description}]\n{seg.raw_text}"
+    section_titles = [p.get("title", "") for p in seg.section_path if p.get("title")]
+
+    return RetrievalUnitData(
+        segment_key=f"{seg.document_key}#{seg.segment_index}",
+        unit_key=f"ru:{seg.document_key}#{seg.segment_index}:contextual_enhanced",
+        unit_type="contextual_text",
+        target_type="raw_segment",
+        target_ref_json={
+            "document_key": seg.document_key,
+            "segment_index": seg.segment_index,
+        },
+        title=seg.section_title,
+        text=enhanced_text,
+        search_text=tokenize_for_search(enhanced_text),
+        block_type=seg.block_type,
+        semantic_role=seg.semantic_role,
+        facets_json=_build_facets(seg),
+        entity_refs_json=list(seg.entity_refs_json),
+        source_refs_json=_build_source_refs(seg),
+        llm_result_refs_json={"source": "contextual_retrieval"},
+        source_segment_id=source_seg_id,
+        weight=0.9,
+        metadata_json={
+            "section_titles": section_titles,
+            "segment_index": seg.segment_index,
+            "context_description": context_description,
+        },
+    )

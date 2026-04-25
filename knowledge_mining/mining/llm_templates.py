@@ -36,4 +36,48 @@ TEMPLATES: list[dict[str, Any]] = [
         ),
         "expected_output_type": "json_object",
     },
+    {
+        "template_key": "mining-discourse-relation",
+        "template_version": "1",
+        "purpose": "分析段落间的语篇关系（RST修辞结构理论）",
+        "system_prompt": "你是通信网络技术文档的语篇关系分析专家。分析给定段落列表中相邻段落之间的修辞关系。",
+        "user_prompt_template": (
+            "分析以下编号段落之间的语篇关系：\n\n"
+            "$segments\n\n"
+            "对每对相邻或同节段落，判断其修辞关系。可选关系类型：\n"
+            "- ELABORATES: 后文详细阐述前文\n"
+            "- EVIDENCES: 后文提供证据支持前文\n"
+            "- CAUSES: 后文是前文的原因\n"
+            "- RESULTS_IN: 后文是前文的结果\n"
+            "- BACKGROUNDS: 后文提供背景信息\n"
+            "- CONDITIONS: 后文说明前提条件\n"
+            "- SUMMARIZES: 后文总结前文\n"
+            "- JUSTIFIES: 后文解释前文的理由\n"
+            "- ENABLES: 后文使前文的操作成为可能\n"
+            "- CONTRASTS_WITH: 后文与前文对比\n"
+            "- PARALLELS: 后文与前文并列\n"
+            "- SEQUENCES: 后文是前文的后续步骤\n"
+            "- UNRELATED: 无明显关系\n\n"
+            "输出 JSON 数组，每个元素包含：\n"
+            "- source: 源段落编号（整数）\n"
+            "- target: 目标段落编号（整数）\n"
+            "- relation: 关系类型（大写）\n"
+            "- confidence: 置信度（0.0-1.0）\n\n"
+            "只输出有明确关系的段落对，跳过 UNRELATED 的。"
+        ),
+        "expected_output_type": "json_array",
+    },
+    {
+        "template_key": "mining-contextual-retrieval",
+        "template_version": "1",
+        "purpose": "为每个段落生成上下文描述，增强检索效果",
+        "system_prompt": "你是通信网络技术文档的上下文分析专家。你的任务是为文档中的每个段落生成一句简短的上下文描述，说明该段落在整个文档中的位置和作用。",
+        "user_prompt_template": (
+            "文档全文：\n$document\n\n"
+            "段落内容：\n$segment\n\n"
+            "请生成一句简短的中文上下文描述（不超过50字），说明该段落在文档中的位置、主题和作用。\n"
+            "输出 JSON 对象，包含 context 字段。"
+        ),
+        "expected_output_type": "json_object",
+    },
 ]

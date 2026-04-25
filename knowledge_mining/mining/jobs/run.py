@@ -52,6 +52,10 @@ def run(
     publish_on_partial_failure: bool = False,
     llm_base_url: str | None = None,
     llm_bypass_proxy: bool = False,
+    embedding_api_key: str | None = None,
+    embedding_model: str = "embedding-3",
+    embedding_base_url: str = "https://open.bigmodel.cn/api/paas/v4",
+    embedding_dimensions: int = 2048,
 ) -> dict[str, Any]:
     """Execute the mining pipeline.
 
@@ -65,6 +69,10 @@ def run(
             Default False: partial failures block active release, run marked "completed_with_errors".
         llm_base_url: LLM service URL (e.g. "http://localhost:8900"). None = no LLM.
         llm_bypass_proxy: If True, bypass system proxy for LLM calls (for corporate networks).
+        embedding_api_key: Zhipu API key for Embedding-3. None = no embedding.
+        embedding_model: Embedding model name (default: embedding-3).
+        embedding_base_url: Zhipu embedding API base URL.
+        embedding_dimensions: Embedding vector dimensions.
 
     Returns:
         Summary dict with run_id, counts, and status.
@@ -83,12 +91,17 @@ def run(
     run_id = uuid.uuid4().hex
 
     # LLM integration: create question generator if URL provided
-    question_generator = _init_llm(llm_base_url, llm_bypass_proxy)
+    llm_services = _init_llm(llm_base_url, llm_bypass_proxy)
+
+    # Embedding integration: create ZhipuEmbeddingGenerator if key provided
+    embedding_generator = _init_embedding(
+        embedding_api_key, embedding_model, embedding_base_url, embedding_dimensions,
+    )
 
     try:
         return _run_pipeline(
             asset_db, runtime_db, input_path, params, phase1_only, run_id,
-            publish_on_partial_failure, question_generator,
+            publish_on_partial_failure, llm_services, embedding_generator,
         )
     except Exception as e:
         # Mark run as failed
@@ -152,7 +165,7 @@ def _init_llm(llm_base_url: str | None, bypass_proxy: bool = False) -> dict[str,
     """Initialize LLM services if URL provided.
 
     Registers templates if llm_service is reachable.
-    Returns dict with question_generator and enricher, or None.
+    Returns dict with question_generator, enricher, discourse_relation_builder, contextualizer, or None.
     """
     if not llm_base_url:
         return None
@@ -185,7 +198,44 @@ def _init_llm(llm_base_url: str | None, bypass_proxy: bool = False) -> dict[str,
     except (ImportError, Exception):
         pass
 
+    # v1.2: Create DiscourseRelationBuilder
+    try:
+        from knowledge_mining.mining.relations import DiscourseRelationBuilder
+        result["discourse_relation_builder"] = DiscourseRelationBuilder(
+            base_url=llm_base_url, bypass_proxy=bypass_proxy,
+        )
+    except (ImportError, Exception):
+        pass
+
+    # v1.2: Create LLMContextualizer
+    try:
+        from knowledge_mining.mining.retrieval_units import LLMContextualizer
+        result["contextualizer"] = LLMContextualizer(
+            base_url=llm_base_url, bypass_proxy=bypass_proxy,
+        )
+    except (ImportError, Exception):
+        pass
+
     return result
+
+
+def _init_embedding(
+    api_key: str | None,
+    model: str = "embedding-3",
+    base_url: str = "https://open.bigmodel.cn/api/paas/v4",
+    dimensions: int = 2048,
+) -> Any | None:
+    """Initialize ZhipuEmbeddingGenerator if API key is provided."""
+    if not api_key:
+        return None
+
+    from knowledge_mining.mining.embedding import ZhipuEmbeddingGenerator
+    return ZhipuEmbeddingGenerator(
+        api_key=api_key,
+        model=model,
+        base_url=base_url,
+        dimensions=dimensions,
+    )
 
 
 def _run_pipeline(
@@ -196,10 +246,12 @@ def _run_pipeline(
     phase1_only: bool,
     run_id: str,
     publish_on_partial_failure: bool = False,
-    question_generator: Any = None,
+    llm_services: dict[str, Any] | None = None,
+    embedding_generator: Any | None = None,
 ) -> dict[str, Any]:
     """Core pipeline logic. Assumes DBs are already open."""
     tracker = RuntimeTracker(runtime_db)
+    llm = llm_services or {}
 
     now = _utcnow()
 
@@ -238,13 +290,18 @@ def _run_pipeline(
     pipeline_config = PipelineConfig(
         parser_factory=create_parser,
         segmenter=DefaultSegmenter(),
-        enricher=enricher,
+        enricher=llm.get("enricher") or enricher,
         relation_builder=DefaultRelationBuilder(),
-        question_generator=question_generator,
+        question_generator=llm.get("question_generator"),
+        embedding_generator=embedding_generator,
+        discourse_relation_builder=llm.get("discourse_relation_builder"),
+        contextualizer=llm.get("contextualizer"),
     )
     pipeline = MiningPipeline(pipeline_config)
 
     committed_count = 0
+    new_count = 0
+    updated_count = 0
     failed_count = 0
     skipped_count = 0
     snapshot_decisions: list[dict[str, Any]] = []
@@ -405,9 +462,12 @@ def _run_pipeline(
                     )
 
             # Write retrieval units to DB
+            ru_id_map: dict[str, str] = {}  # unit_key -> unit_id
             for ru in retrieval_units:
+                unit_id = uuid.uuid4().hex
+                ru_id_map[ru.unit_key] = unit_id
                 asset_db.insert_retrieval_unit(
-                    unit_id=uuid.uuid4().hex,
+                    unit_id=unit_id,
                     document_snapshot_id=snapshot_id,
                     unit_key=ru.unit_key,
                     unit_type=ru.unit_type,
@@ -429,9 +489,38 @@ def _run_pipeline(
 
             asset_db.commit()
 
+            # Generate embeddings for retrieval units (if embedding_generator configured)
+            if embedding_generator is not None and retrieval_units:
+                try:
+                    texts_to_embed = [ru.text for ru in retrieval_units if ru.text]
+                    unit_keys_with_text = [ru.unit_key for ru in retrieval_units if ru.text]
+                    if texts_to_embed:
+                        embeddings = embedding_generator.embed_batch(texts_to_embed)
+                        if embeddings and len(embeddings) == len(texts_to_embed):
+                            import json as _json
+                            for unit_key, text, embedding_vec in zip(unit_keys_with_text, texts_to_embed, embeddings):
+                                if embedding_vec and unit_key in ru_id_map:
+                                    asset_db.insert_retrieval_embedding(
+                                        embedding_id=uuid.uuid4().hex,
+                                        retrieval_unit_id=ru_id_map[unit_key],
+                                        embedding_model=embedding_generator.model_name,
+                                        embedding_provider="zhipu",
+                                        text_kind="full",
+                                        embedding_dim=len(embedding_vec),
+                                        embedding_vector=_json.dumps(embedding_vec),
+                                        content_hash="",
+                                    )
+                            asset_db.commit()
+                except Exception as e:
+                    logger.warning("Embedding generation failed for document %s: %s", doc_key, e)
+
             # Commit document
             tracker.commit_document(rd_id, document_id, snapshot_id)
             committed_count += 1
+            if action == "NEW":
+                new_count += 1
+            elif action == "UPDATE":
+                updated_count += 1
 
             snapshot_decisions.append({
                 "document_id": document_id,
@@ -494,7 +583,8 @@ def _run_pipeline(
         committed_count=committed_count,
         failed_count=failed_count,
         skipped_count=skipped_count,
-        new_count=committed_count,
+        new_count=new_count,
+        updated_count=updated_count,
     )
     runtime_db.commit()
 
@@ -503,6 +593,8 @@ def _run_pipeline(
         "status": run_status,
         "total_documents": len(docs),
         "committed_count": committed_count,
+        "new_count": new_count,
+        "updated_count": updated_count,
         "failed_count": failed_count,
         "skipped_count": skipped_count,
         "build_id": build_id,
