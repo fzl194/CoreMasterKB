@@ -154,7 +154,7 @@ class LLMService:
         resolved = await self._resolve_template(
             template_key, input, messages, expected_output_type, output_schema,
         )
-        actual_messages = resolved["messages"]
+        actual_messages = resolved["messages"] or [{"role": "user", "content": json.dumps(input or {})}]
         actual_expected_type = resolved["expected_output_type"] or "json_object"
         actual_schema = resolved["output_schema"]
 

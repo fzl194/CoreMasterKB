@@ -292,3 +292,53 @@ async def test_execute_with_text_template_parses_as_text(db):
     assert result["status"] == "succeeded"
     assert result["result"]["parse_status"] == "succeeded"
     assert result["result"]["text_output"] == "This is plain text."
+
+
+async def test_submit_without_messages_falls_back_to_input_payload(db):
+    """Async submit should persist a synthetic user message when only input is provided."""
+    from llm_service.config import LLMServiceConfig
+    from llm_service.providers.mock import MockProvider
+    from llm_service.runtime.service import LLMService
+
+    cfg = LLMServiceConfig(db_path=":memory:", provider_api_key="test")
+    provider = MockProvider(responses=[{"choices": [{"message": {"content": '{"ok": true}'}}]}])
+    svc = LLMService(db=db, provider=provider, config=cfg)
+
+    task_id = await svc.submit(
+        "mining", "bulk_submit",
+        input={"title": "Section A", "content": "payload"},
+        expected_output_type="json_object",
+    )
+
+    cur = await db.execute("SELECT messages_json, input_json FROM agent_llm_requests WHERE task_id = ?", (task_id,))
+    row = await cur.fetchone()
+    assert row is not None
+    assert json.loads(row["input_json"]) == {"title": "Section A", "content": "payload"}
+    assert json.loads(row["messages_json"]) == [
+        {"role": "user", "content": '{"title": "Section A", "content": "payload"}'},
+    ]
+
+
+async def test_submit_with_missing_template_still_persists_fallback_message(db):
+    """Missing template should not leave async worker with empty messages."""
+    from llm_service.config import LLMServiceConfig
+    from llm_service.providers.mock import MockProvider
+    from llm_service.runtime.service import LLMService
+
+    cfg = LLMServiceConfig(db_path=":memory:", provider_api_key="test")
+    provider = MockProvider(responses=[{"choices": [{"message": {"content": '{"ok": true}'}}]}])
+    svc = LLMService(db=db, provider=provider, config=cfg)
+
+    task_id = await svc.submit(
+        "mining", "retrieval_units",
+        template_key="missing-template",
+        input={"query": "What is APN?"},
+        expected_output_type="json_object",
+    )
+
+    cur = await db.execute("SELECT messages_json FROM agent_llm_requests WHERE task_id = ?", (task_id,))
+    row = await cur.fetchone()
+    assert row is not None
+    assert json.loads(row["messages_json"]) == [
+        {"role": "user", "content": '{"query": "What is APN?"}'},
+    ]
