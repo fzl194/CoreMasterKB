@@ -323,10 +323,19 @@ def _run_pipeline(
         existing_doc = asset_db.get_document_by_key(doc_key)
         if existing_doc is None:
             action = "NEW"
-        elif existing_doc["normalized_content_hash"] != doc.normalized_content_hash:
-            action = "UPDATE"
         else:
-            action = "SKIP"
+            # Compare against active snapshot's hash (not asset_documents)
+            active_link = asset_db._fetchone(
+                "SELECT ds.normalized_content_hash "
+                "FROM asset_document_snapshot_links dsl "
+                "JOIN asset_document_snapshots ds ON dsl.document_snapshot_id = ds.id "
+                "WHERE dsl.document_id = ? ORDER BY dsl.linked_at DESC LIMIT 1",
+                (existing_doc["id"],),
+            )
+            if active_link and active_link["normalized_content_hash"] == doc.normalized_content_hash:
+                action = "SKIP"
+            else:
+                action = "UPDATE"
 
         tracker.register_document(MiningRunDocumentData(
             id=rd_id,
@@ -342,7 +351,7 @@ def _run_pipeline(
         if action == "SKIP" and existing_doc is not None:
             existing_link = asset_db._fetchone(
                 "SELECT document_snapshot_id FROM asset_document_snapshot_links "
-                "WHERE document_id = ? ORDER BY created_at DESC LIMIT 1",
+                "WHERE document_id = ? ORDER BY linked_at DESC LIMIT 1",
                 (existing_doc["id"],),
             )
             if existing_link:
@@ -433,7 +442,7 @@ def _run_pipeline(
             if action == "UPDATE" and existing_doc is not None:
                 old_links = asset_db._fetchall(
                     "SELECT document_snapshot_id FROM asset_document_snapshot_links "
-                    "WHERE document_id = ? ORDER BY created_at DESC",
+                    "WHERE document_id = ? ORDER BY linked_at DESC",
                     (existing_doc["id"],),
                 )
                 for old_link in old_links[1:] if len(old_links) > 1 else []:
@@ -443,7 +452,8 @@ def _run_pipeline(
                     asset_db.delete_segments_by_snapshot(old_snap_id)
                 asset_db.commit()
 
-            # Write segments to DB
+            # Write segments to DB (track at commit time since pipeline ran in streaming)
+            evt_seg = tracker.start_stage(run_id, "segment", rd_id)
             for seg in segments:
                 seg_key = f"{seg.document_key}#{seg.segment_index}"
                 seg_id = seg_id_map.get(seg_key, uuid.uuid4().hex)
@@ -468,6 +478,7 @@ def _run_pipeline(
                 )
 
             # Write relations to DB
+            evt_rel = tracker.start_stage(run_id, "build_relations", rd_id)
             for rel in relations:
                 src_id = seg_id_map.get(rel.source_segment_key, "")
                 tgt_id = seg_id_map.get(rel.target_segment_key, "")
@@ -483,8 +494,13 @@ def _run_pipeline(
                         distance=rel.distance,
                         metadata_json=rel.metadata_json,
                     )
+            tracker.end_stage(evt_rel, run_id, "build_relations",
+                              output_summary=f"{len(relations)} relations")
+            tracker.end_stage(evt_seg, run_id, "segment",
+                              output_summary=f"{len(segments)} segments")
 
             # Write retrieval units to DB
+            evt_ru = tracker.start_stage(run_id, "build_retrieval_units", rd_id)
             ru_id_map: dict[str, str] = {}
             for ru in retrieval_units:
                 unit_id = uuid.uuid4().hex
@@ -511,6 +527,8 @@ def _run_pipeline(
                 )
 
             asset_db.commit()
+            tracker.end_stage(evt_ru, run_id, "build_retrieval_units",
+                              output_summary=f"{len(retrieval_units)} units")
 
             # Generate embeddings for retrieval units (if embedding_generator configured)
             if embedding_generator is not None and retrieval_units:
@@ -598,7 +616,13 @@ def _run_pipeline(
             runtime_db.commit()
 
     # Determine final run status (use SQL-valid values only)
+    # All docs failed -> "failed"; some failed -> "completed" with has_failures metadata
     run_status = "completed"
+    run_metadata = None
+    if failed_count > 0 and committed_count == 0:
+        run_status = "failed"
+    elif failed_count > 0:
+        run_metadata = {"has_failures": True, "failed_count": failed_count}
 
     tracker.complete_run(
         run_id,
@@ -608,6 +632,7 @@ def _run_pipeline(
         skipped_count=skipped_count,
         new_count=new_count,
         updated_count=updated_count,
+        metadata_json=run_metadata,
     )
     runtime_db.commit()
 
