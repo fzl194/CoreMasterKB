@@ -146,6 +146,121 @@ async def test_execute_metadata_persisted(db):
     assert row["id"]  # auto-generated, not empty
 
 
+async def test_schema_injected_into_system_prompt(db):
+    """When template has output_schema_json + json_object type, schema is appended to system prompt."""
+    from llm_service.config import LLMServiceConfig
+    from llm_service.providers.mock import MockProvider
+    from llm_service.runtime.service import LLMService
+    from llm_service.runtime.template_registry import TemplateRegistry
+
+    cfg = LLMServiceConfig(db_path=":memory:", provider_api_key="test")
+    provider = MockProvider(responses=[{"choices": [{"message": {"content": '{"summary": "ok"}'}}]}])
+    svc = LLMService(db=db, provider=provider, config=cfg)
+    reg = TemplateRegistry(db)
+
+    schema = {
+        "type": "object",
+        "properties": {"summary": {"type": "string"}},
+        "required": ["summary"],
+        "additionalProperties": False,
+    }
+    await reg.create(
+        template_key="json-tpl",
+        template_version="1",
+        purpose="test schema injection",
+        system_prompt="You summarize text.",
+        user_prompt_template="Summarize: $text",
+        expected_output_type="json_object",
+        output_schema_json=json.dumps(schema),
+    )
+
+    resolved = await svc._resolve_template(
+        template_key="json-tpl",
+        input={"text": "hello"},
+        messages=None,
+        expected_output_type=None,
+        output_schema=None,
+    )
+
+    msgs = resolved["messages"]
+    assert len(msgs) == 2
+    system_content = msgs[0]["content"]
+    assert "You summarize text." in system_content
+    assert "JSON Schema" in system_content
+    assert '"summary"' in system_content
+
+
+async def test_schema_injected_no_system_prompt(db):
+    """When no system prompt exists, schema becomes a new system message."""
+    from llm_service.config import LLMServiceConfig
+    from llm_service.providers.mock import MockProvider
+    from llm_service.runtime.service import LLMService
+    from llm_service.runtime.template_registry import TemplateRegistry
+
+    cfg = LLMServiceConfig(db_path=":memory:", provider_api_key="test")
+    provider = MockProvider(responses=[{"choices": [{"message": {"content": '{"name": "test"}'}}]}])
+    svc = LLMService(db=db, provider=provider, config=cfg)
+    reg = TemplateRegistry(db)
+
+    schema = {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}
+    await reg.create(
+        template_key="no-sys",
+        template_version="1",
+        purpose="test",
+        user_prompt_template="Tell me $thing",
+        expected_output_type="json_object",
+        output_schema_json=json.dumps(schema),
+    )
+
+    resolved = await svc._resolve_template(
+        template_key="no-sys",
+        input={"thing": "name"},
+        messages=None,
+        expected_output_type=None,
+        output_schema=None,
+    )
+
+    msgs = resolved["messages"]
+    assert len(msgs) == 2
+    assert msgs[0]["role"] == "system"
+    assert "JSON Schema" in msgs[0]["content"]
+
+
+async def test_schema_not_injected_for_text_type(db):
+    """Schema injection only happens for json_object / json_array, not text."""
+    from llm_service.config import LLMServiceConfig
+    from llm_service.providers.mock import MockProvider
+    from llm_service.runtime.service import LLMService
+    from llm_service.runtime.template_registry import TemplateRegistry
+
+    cfg = LLMServiceConfig(db_path=":memory:", provider_api_key="test")
+    provider = MockProvider(responses=[{"choices": [{"message": {"content": "plain text"}}]}])
+    svc = LLMService(db=db, provider=provider, config=cfg)
+    reg = TemplateRegistry(db)
+
+    schema = {"type": "object", "properties": {"x": {"type": "integer"}}}
+    await reg.create(
+        template_key="text-tpl2",
+        template_version="1",
+        purpose="test",
+        system_prompt="You are helpful.",
+        user_prompt_template="Say hi",
+        expected_output_type="text",
+        output_schema_json=json.dumps(schema),
+    )
+
+    resolved = await svc._resolve_template(
+        template_key="text-tpl2",
+        input=None,
+        messages=None,
+        expected_output_type=None,
+        output_schema=None,
+    )
+
+    # No injection for text type
+    assert resolved["messages"][0]["content"] == "You are helpful."
+
+
 async def test_execute_with_text_template_parses_as_text(db):
     """execute with text template: parse_status is succeeded, not failed."""
     from llm_service.config import LLMServiceConfig
