@@ -107,6 +107,13 @@ VALID_TARGET_TYPES = frozenset({
     "other",
 })
 
+# 7 strong entity types — only these get entity_card retrieval units.
+# "concept" is kept in entity_refs_json for metadata but does NOT get a card.
+STRONG_ENTITY_TYPES = frozenset({
+    "command", "network_element", "parameter",
+    "protocol", "interface", "alarm", "feature",
+})
+
 VALID_RUN_STATUSES = frozenset({
     "queued",
     "running",

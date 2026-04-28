@@ -25,12 +25,15 @@ from knowledge_mining.mining.extractors import (
     RoleClassifier,
     RuleBasedEntityExtractor,
 )
-from knowledge_mining.mining.models import RawSegmentData
+from knowledge_mining.mining.models import STRONG_ENTITY_TYPES, RawSegmentData
 
 _SCHEMA_SEMANTIC_ROLES = frozenset({
     "concept", "parameter", "example", "note", "procedure_step",
     "troubleshooting_step", "constraint", "alarm", "checklist", "unknown",
 })
+
+# Allowed entity types from LLM: 7 strong types + concept (metadata only)
+_ALLOWED_ENTITY_TYPES = STRONG_ENTITY_TYPES | {"concept"}
 
 
 @runtime_checkable
@@ -179,13 +182,13 @@ def _apply_llm_result(seg: RawSegmentData, result: dict[str, Any]) -> RawSegment
     """Apply LLM enrichment result to a segment."""
     changes: dict[str, Any] = {}
 
-    # Extract entities from LLM result
+    # Extract entities from LLM result — filter to allowed types only
     entities = result.get("entities", [])
     if entities and isinstance(entities, list):
         entity_refs = [
             {"type": e.get("type", "unknown"), "name": e.get("name", "")}
             for e in entities
-            if e.get("name")
+            if e.get("name") and e.get("type") in _ALLOWED_ENTITY_TYPES
         ]
         # Merge with existing entities
         existing = {(r["type"], r["name"]) for r in seg.entity_refs_json}

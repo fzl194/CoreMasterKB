@@ -21,7 +21,7 @@ import logging
 import uuid
 from typing import Any, Protocol, runtime_checkable
 
-from knowledge_mining.mining.models import RawSegmentData, RetrievalUnitData
+from knowledge_mining.mining.models import STRONG_ENTITY_TYPES, RawSegmentData, RetrievalUnitData
 from knowledge_mining.mining.text_utils import tokenize_for_search
 
 logger = logging.getLogger(__name__)
@@ -30,8 +30,8 @@ logger = logging.getLogger(__name__)
 # Constants
 # ---------------------------------------------------------------------------
 
-# Only these entity types get dedicated cards — 5-15% of extracted entities
-_STRONG_ENTITY_TYPES = frozenset({"command", "protocol", "network_element", "parameter"})
+# Only these entity types get dedicated cards — shared with enrich and models
+_STRONG_ENTITY_TYPES = STRONG_ENTITY_TYPES
 
 # Max generated questions per segment (down from unlimited)
 MAX_QUESTIONS_PER_SEGMENT = 2

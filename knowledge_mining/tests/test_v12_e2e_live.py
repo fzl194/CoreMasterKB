@@ -277,6 +277,7 @@ class TestLiveLLMPipeline:
                 assert "raw_segment_ids" in src_refs, f"Missing raw_segment_ids in source_refs: {src_refs}"
 
             # === Retrieval unit-level: LLM contextual retrieval (v1.3: folded into raw_text) ===
+            raw_text_units = [u for u in units if u["unit_type"] == "raw_text"]
             ctx_enhanced = [u for u in raw_text_units
                            if "context_description" in (json.loads(u.get("metadata_json") or "{}"))]
             print(f"Raw text units with LLM context: {len(ctx_enhanced)}")
@@ -295,9 +296,6 @@ class TestLiveLLMPipeline:
             assert not any(u["unit_type"] == "contextual_text" for u in units), (
                 "v1.3 should not produce contextual_text units — merged into raw_text"
             )
-
-            # === All raw_text units should have raw_segment_ids in source_refs ===
-            raw_text_units = [u for u in units if u["unit_type"] == "raw_text"]
             for u in raw_text_units:
                 src_refs = json.loads(u.get("source_refs_json") or "{}")
                 assert "raw_segment_ids" in src_refs, f"raw_text unit missing raw_segment_ids: {u['unit_key']}"

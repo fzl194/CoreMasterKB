@@ -304,6 +304,22 @@ class TestExtractors:
         assert "command" in types
         assert "network_element" in types
 
+    def test_interface_extraction(self):
+        from knowledge_mining.mining.extractors import RuleBasedEntityExtractor
+        ext = RuleBasedEntityExtractor()
+        refs = ext.extract('配置N4接口，使用PFCP协议建立连接。Sxb接口也需要配置。', {})
+        names = {r["name"] for r in refs if r["type"] == "interface"}
+        assert "N4" in names
+        assert "Sxb" in names
+
+    def test_alarm_extraction(self):
+        from knowledge_mining.mining.extractors import RuleBasedEntityExtractor
+        ext = RuleBasedEntityExtractor()
+        refs = ext.extract('告警ALM-PFCP-PEER-DOWN需要处理，还有ALM-POOL-THRESHOLD。', {})
+        names = {r["name"] for r in refs if r["type"] == "alarm"}
+        assert "ALM-PFCP-PEER-DOWN" in names
+        assert "ALM-POOL-THRESHOLD" in names
+
     def test_role_classifier(self):
         from knowledge_mining.mining.extractors import DefaultRoleClassifier
         cls = DefaultRoleClassifier()

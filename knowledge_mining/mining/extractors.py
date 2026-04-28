@@ -37,6 +37,20 @@ _CMD_PATTERN = re.compile(
     r"\s+([A-Z][A-Z0-9_]{1,20})",
 )
 
+# 3GPP service-based interface reference points: N1-N28, Sx[a|b|c], S1-MME/U, S6a, S11, Gx
+# Use lookaround instead of \b — Chinese/Japanese chars are not \w boundaries
+_INTERFACE_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9_])"
+    r"(N[1-9]\d?|N1[0-9]\d?|N2[0-8]|"
+    r"Sx[abc]|S1[ -](?:MME|U)|S6a|S11|Gx)"
+    r"(?![A-Za-z0-9_])"
+)
+
+# Alarm IDs: ALM-XXXX-XXXX format (Huawei UDG convention)
+_ALARM_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9_])(ALM-[A-Z][A-Z0-9_-]{2,40})(?![A-Za-z0-9_-])"
+)
+
 _ROLE_RULES: list[tuple[list[str], str]] = [
     (["参数", "参数说明", "参数标识"], "parameter"),
     (["使用实例", "命令格式", "示例", "配置示例"], "example"),
@@ -80,6 +94,20 @@ class RuleBasedEntityExtractor:
                         if key not in seen:
                             seen.add(key)
                             refs.append({"type": "parameter", "name": param_name})
+
+        for match in _INTERFACE_PATTERN.finditer(text):
+            iface_name = match.group(1)
+            key = f"interface:{iface_name}"
+            if key not in seen:
+                seen.add(key)
+                refs.append({"type": "interface", "name": iface_name})
+
+        for match in _ALARM_PATTERN.finditer(text):
+            alarm_name = match.group(1)
+            key = f"alarm:{alarm_name}"
+            if key not in seen:
+                seen.add(key)
+                refs.append({"type": "alarm", "name": alarm_name})
 
         return refs
 
