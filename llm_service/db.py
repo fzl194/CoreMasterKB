@@ -21,10 +21,12 @@ async def init_db(db_path: str) -> aiosqlite.Connection:
     All existing commit() calls become harmless no-ops.
     """
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-    conn = await aiosqlite.connect(db_path, isolation_level=None)
+    conn = await aiosqlite.connect(db_path, isolation_level=None, timeout=30.0)
     conn.row_factory = aiosqlite.Row
     await conn.execute("PRAGMA foreign_keys = ON")
+    await conn.execute("PRAGMA busy_timeout = 30000")
     await conn.execute("PRAGMA journal_mode = WAL")
+    await conn.execute("PRAGMA synchronous = NORMAL")
     schema_sql = _SCHEMA_PATH.read_text(encoding="utf-8")
     await conn.executescript(schema_sql)
     await conn.commit()
