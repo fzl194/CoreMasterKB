@@ -150,3 +150,30 @@ llm_templates:
     output_schema_json: '{"type":"object","properties":{"context":{"type":"string"}},"required":["context"],"additionalProperties":false}'
 
 eval_questions: []
+
+# ---------------------------------------------------------------------------
+# Serving configuration
+# ---------------------------------------------------------------------------
+
+serving:
+  route_policy:
+    default:
+      lexical_bm25: {weight: 1.0, top_k: 50}
+      entity_exact: {weight: 1.0, top_k: 30}
+      dense_vector: {weight: 0.8, top_k: 50}
+    command_usage:
+      entity_exact: {weight: 1.4, top_k: 20}
+      lexical_bm25: {weight: 1.0, top_k: 50}
+      dense_vector: {weight: 0.5, top_k: 30}
+    concept_lookup:
+      dense_vector: {weight: 1.2, top_k: 50}
+      lexical_bm25: {weight: 1.0, top_k: 50}
+      entity_exact: {weight: 0.6, top_k: 20}
+    troubleshooting:
+      lexical_bm25: {weight: 1.0, top_k: 50}
+      entity_exact: {weight: 1.2, top_k: 30}
+      dense_vector: {weight: 0.6, top_k: 30}
+    comparison:
+      lexical_bm25: {weight: 1.0, top_k: 50}
+      dense_vector: {weight: 1.0, top_k: 50}
+      entity_exact: {weight: 1.0, top_k: 30}
