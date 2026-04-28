@@ -57,6 +57,7 @@ class RetrievalPolicy:
     entity_card: str = "strong_entities_only"
     table_row: str = "structured_tables"
     max_questions_per_segment: int = 2
+    max_entity_cards_per_segment: int = 3
 
 
 @dataclass(frozen=True)
@@ -139,6 +140,7 @@ def _parse_retrieval_policy(raw: dict[str, Any]) -> RetrievalPolicy:
         entity_card=raw.get("entity_card", "strong_entities_only"),
         table_row=raw.get("table_row", "structured_tables"),
         max_questions_per_segment=raw.get("max_questions_per_segment", 2),
+        max_entity_cards_per_segment=raw.get("max_entity_cards_per_segment", 3),
     )
 
 

@@ -114,9 +114,9 @@ class TestGeneratedQuestionDifferentiation:
 
         unit = _make_generated_question_unit(seg, "如何配置网络参数？", 0)
 
-        # title should have Q prefix
-        assert unit.title.startswith("Q1:")
-        assert "如何配置网络参数" in unit.title
+        # v1.5: title should be pure question text (no Qn prefix)
+        assert unit.title.startswith("如何配置网络参数")
+        assert not unit.title.startswith("Q")
 
         # text should include source context
         assert "如何配置网络参数？" in unit.text
@@ -142,7 +142,9 @@ class TestGeneratedQuestionDifferentiation:
             raw_text="test content",
         )
         unit = _make_generated_question_unit(seg, "What is this?", 1)
-        assert unit.title.startswith("Q2:")
+        # v1.5: title should be pure question text (no Qn prefix)
+        assert unit.title.startswith("What is this?")
+        assert not unit.title.startswith("Q")
 
 
 class TestQuestionGenerationFilter:

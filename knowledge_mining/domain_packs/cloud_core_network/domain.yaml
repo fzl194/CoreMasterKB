@@ -115,6 +115,7 @@ retrieval_policy:
   entity_card: strong_entities_only
   table_row: structured_tables
   max_questions_per_segment: 2
+  max_entity_cards_per_segment: 3
 
 # ---------------------------------------------------------------------------
 # LLM templates
@@ -122,28 +123,33 @@ retrieval_policy:
 
 llm_templates:
   - template_key: mining-question-gen
-    template_version: "2"
+    template_version: "3"
     purpose: "从段落内容生成假设性检索问题"
-    system_prompt: "你是通信网络知识库的检索优化助手。"
+    system_prompt: "你是通信网络知识库的检索优化助手。你判断段落是否值得生成问题，如果是则生成高质量检索问题。"
     user_prompt_template: >
-      根据以下技术文档段落，生成 1-2 个用户可能提出的问题。
+      分析以下技术文档段落：
 
       段落标题：$title
       段落内容：$content
 
-      要求：
-      - 问题必须能从该段落中找到明确答案
-      - 避免生成高度相似或近义的问题
-      - 如果段落内容过于简短，生成 0-1 个即可
+      首先评估该段落是否包含值得生成问题的实质性知识：
+      - 如果是目录、导航列表、纯链接/锚点列表：输出空数组 []
+      - 如果是大量空值或占位符的稀疏表格：输出空数组 []
+      - 如果内容过于简短或模糊，无法生成有意义的问题：输出空数组 []
 
-      输出 JSON 数组，每个元素包含 question 字段。
+      如果段落确实包含实质性知识，生成 1-2 个问题：
+      - 问题必须能从该段落中找到明确答案
+      - 问题应测试知识理解，而非导航（避免"在哪里找到X"、"文档有哪些章节"）
+      - 避免生成高度相似或近义的问题
+
+      输出 JSON 数组，每个元素包含 question 字段。无合适问题时输出空数组 []。
     expected_output_type: json_array
     output_schema_json: '{"type":"array","items":{"type":"object","properties":{"question":{"type":"string"}},"required":["question"],"additionalProperties":false}}'
 
   - template_key: mining-segment-understanding
-    template_version: "2"
-    purpose: "从段落提取实体并分类语义角色"
-    system_prompt: "你是通信网络知识库的内容理解助手。分析技术文档段落，提取关键实体并分类语义角色。"
+    template_version: "3"
+    purpose: "从段落提取实体、分类语义角色、评估内容质量"
+    system_prompt: "你是通信网络知识库的内容理解助手。分析技术文档段落，提取关键实体、分类语义角色，并评估内容质量。"
     user_prompt_template: >
       分析以下技术文档段落：
 
@@ -164,8 +170,18 @@ llm_templates:
 
       - semantic_role: 语义角色（concept/parameter/example/note/procedure_step/troubleshooting_step/constraint/alarm/checklist/unknown）
       - document_type: 文档类型提示（command/feature/procedure/troubleshooting/alarm/constraint/checklist/reference/other）
+      - content_assessment: 内容质量评估
+        - is_substantive: 是否包含实质性知识内容（非纯导航、目录、链接列表）
+        - is_navigation: 是否是导航/目录内容
+        - assessment_reason: 一句话说明判断依据
+
+      内容质量评估指引：
+      - 如果段落只是锚点列表、目录索引、纯链接，is_substantive=false, is_navigation=true
+      - 如果段落包含具体的技术描述、参数说明、操作步骤，is_substantive=true
+      - 稀疏表格（大量空值或占位符"-"）视为非实质性内容
+      - 纯标题无内容视为非实质性内容
     expected_output_type: json_object
-    output_schema_json: '{"type":"object","properties":{"entities":{"type":"array","items":{"type":"object","properties":{"type":{"type":"string"},"name":{"type":"string"}},"required":["type","name"],"additionalProperties":false}},"semantic_role":{"type":"string"},"document_type":{"type":"string"}},"required":["entities","semantic_role","document_type"],"additionalProperties":false}'
+    output_schema_json: '{"type":"object","properties":{"entities":{"type":"array","items":{"type":"object","properties":{"type":{"type":"string"},"name":{"type":"string"}},"required":["type","name"],"additionalProperties":false}},"semantic_role":{"type":"string"},"document_type":{"type":"string"},"content_assessment":{"type":"object","properties":{"is_substantive":{"type":"boolean"},"is_navigation":{"type":"boolean"},"assessment_reason":{"type":"string"}},"required":["is_substantive","is_navigation"],"additionalProperties":false}},"required":["entities","semantic_role","document_type","content_assessment"],"additionalProperties":false}'
 
   - template_key: mining-discourse-relation
     template_version: "1"

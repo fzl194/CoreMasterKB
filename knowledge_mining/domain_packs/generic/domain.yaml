@@ -54,31 +54,38 @@ retrieval_policy:
   entity_card: strong_entities_only
   table_row: structured_tables
   max_questions_per_segment: 2
+  max_entity_cards_per_segment: 3
 
 llm_templates:
   - template_key: mining-question-gen
-    template_version: "2"
+    template_version: "3"
     purpose: "Generate hypothetical retrieval questions from segment content"
-    system_prompt: "You are a retrieval optimization assistant for technical documentation."
+    system_prompt: "You are a retrieval optimization assistant. You decide whether a segment is worth generating questions for, and if so, generate high-quality retrieval questions."
     user_prompt_template: >
-      Based on the following technical documentation segment, generate 1-2 questions that a user might ask.
+      Analyze the following technical documentation segment:
 
       Segment title: $title
       Segment content: $content
 
-      Requirements:
-      - Questions must be answerable from this segment
-      - Avoid generating similar or synonymous questions
-      - If the segment is too short, generate 0-1 questions
+      First, assess whether this segment contains substantive knowledge that a user would ask questions about.
+      - If this is a table of contents, navigation list, or contains only structural links/headings: output an empty array []
+      - If this is a sparse table with mostly empty or placeholder values: output an empty array []
+      - If the content is too brief or vague to generate meaningful questions: output an empty array []
 
-      Output a JSON array, each element containing a "question" field.
+      If the segment IS substantive, generate 1-2 questions:
+      - Questions must be directly answerable from this segment's content
+      - Questions should test knowledge, not navigation (avoid "where to find X", "what sections are in this document")
+      - Avoid generating similar or synonymous questions
+
+      Output a JSON array. Each element contains a "question" field.
+      Output empty array [] if no good questions can be generated.
     expected_output_type: json_array
     output_schema_json: '{"type":"array","items":{"type":"object","properties":{"question":{"type":"string"}},"required":["question"],"additionalProperties":false}}'
 
   - template_key: mining-segment-understanding
-    template_version: "2"
-    purpose: "Extract entities and classify semantic role from segment"
-    system_prompt: "You are a content understanding assistant for technical documentation. Analyze segments and extract key entities with semantic role classification."
+    template_version: "3"
+    purpose: "Extract entities, classify semantic role, and assess content quality"
+    system_prompt: "You are a content understanding assistant for technical documentation. Analyze segments and extract key entities with semantic role classification and content quality assessment."
     user_prompt_template: >
       Analyze the following technical documentation segment:
 
@@ -91,12 +98,21 @@ llm_templates:
         type values: concept
       - semantic_role: one of concept/parameter/example/note/procedure_step/troubleshooting_step/constraint/alarm/checklist/unknown
       - document_type: one of command/feature/procedure/troubleshooting/alarm/constraint/checklist/reference/other
+      - content_assessment: content quality assessment
+        - is_substantive: whether this segment contains substantive knowledge (not pure navigation/TOC/link lists)
+        - is_navigation: whether this is navigation/TOC content
+        - assessment_reason: one-sentence explanation
 
       Quality guidelines:
       - Only extract entities that are explicitly named in the text
       - If you cannot determine the entity type, do not force a classification
+
+      Content assessment guidelines:
+      - If the segment is just an anchor list, TOC index, or pure links: is_substantive=false, is_navigation=true
+      - If the segment contains concrete technical descriptions, parameter explanations, or procedure steps: is_substantive=true
+      - Sparse tables with mostly empty or placeholder values are not substantive
     expected_output_type: json_object
-    output_schema_json: '{"type":"object","properties":{"entities":{"type":"array","items":{"type":"object","properties":{"type":{"type":"string"},"name":{"type":"string"}},"required":["type","name"],"additionalProperties":false}},"semantic_role":{"type":"string"},"document_type":{"type":"string"}},"required":["entities","semantic_role","document_type"],"additionalProperties":false}'
+    output_schema_json: '{"type":"object","properties":{"entities":{"type":"array","items":{"type":"object","properties":{"type":{"type":"string"},"name":{"type":"string"}},"required":["type","name"],"additionalProperties":false}},"semantic_role":{"type":"string"},"document_type":{"type":"string"},"content_assessment":{"type":"object","properties":{"is_substantive":{"type":"boolean"},"is_navigation":{"type":"boolean"},"assessment_reason":{"type":"string"}},"required":["is_substantive","is_navigation"],"additionalProperties":false}},"required":["entities","semantic_role","document_type","content_assessment"],"additionalProperties":false}'
 
   - template_key: mining-discourse-relation
     template_version: "1"

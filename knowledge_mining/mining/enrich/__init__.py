@@ -237,11 +237,23 @@ def _apply_llm_result(
     if role and role in VALID_SEMANTIC_ROLES and role != seg.semantic_role:
         changes["semantic_role"] = role
 
-    # Extract document type hint
+    # Extract document type hint + content_assessment
     doc_type = result.get("document_type", "")
     meta = dict(seg.metadata_json)
     if doc_type:
         meta["llm_document_type"] = doc_type
+
+    # v1.5: Parse content_assessment from LLM output
+    assessment = result.get("content_assessment", {})
+    if assessment and isinstance(assessment, dict):
+        # Only store validated fields
+        is_substantive = assessment.get("is_substantive")
+        is_navigation = assessment.get("is_navigation")
+        if isinstance(is_substantive, bool) or isinstance(is_navigation, bool):
+            meta["content_assessment"] = {
+                k: v for k, v in assessment.items()
+                if k in ("is_substantive", "is_navigation", "assessment_reason")
+            }
 
     if changes or meta != dict(seg.metadata_json):
         changes["metadata_json"] = meta
@@ -311,6 +323,10 @@ def _enrich_one(
                 pc in c for c in cols for pc in parameter_column_names
             )
 
+    # 4. v1.5: Rule-based content_assessment fallback (when LLM is unavailable)
+    if "content_assessment" not in meta:
+        meta["content_assessment"] = _rule_based_content_assessment(seg)
+
     if changes or meta != dict(seg.metadata_json):
         changes["metadata_json"] = meta
 
@@ -335,6 +351,34 @@ def _enrich_one(
         entity_refs_json=changes.get("entity_refs_json", seg.entity_refs_json),
         metadata_json=changes.get("metadata_json", seg.metadata_json),
     )
+
+
+def _rule_based_content_assessment(seg: RawSegmentData) -> dict[str, Any]:
+    """Simple heuristic content_assessment for RuleBasedEnricher fallback.
+
+    LLM does the intelligent version; this is just a reasonable default
+    when LLM is unavailable.
+    """
+    # Headings are structural, not content
+    if seg.block_type == "heading":
+        return {"is_substantive": False, "is_navigation": False, "assessment_reason": "heading block"}
+
+    # Short list that looks like navigation (all links)
+    if seg.block_type == "list":
+        import re as _re
+        text = seg.raw_text.strip()
+        if text:
+            links = _re.findall(r'\[([^\]]+)\]\(#[^)]+\)', text)
+            lines = [l.strip() for l in text.split('\n') if l.strip()]
+            if links and len(links) >= len(lines) * 0.8:
+                return {
+                    "is_substantive": False,
+                    "is_navigation": True,
+                    "assessment_reason": "list is mostly anchor links",
+                }
+
+    # Everything else is substantive
+    return {"is_substantive": True, "is_navigation": False, "assessment_reason": "rule-based default"}
 
 
 def _validate_semantic_role(role: str) -> str:

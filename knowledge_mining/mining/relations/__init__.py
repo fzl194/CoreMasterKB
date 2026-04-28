@@ -9,11 +9,15 @@ v1.1 builds structural relations:
 v1.2 adds discourse relations (LLM-driven RST analysis):
 - Uses sliding window to analyze segment pairs
 - Identifies rhetorical structure (ELABORATES, EVIDENCES, etc.)
+
+v1.5 adds reference relations:
+- references: TOC/anchor links -> referenced headings (from content_assessment.is_navigation)
 """
 from __future__ import annotations
 
 import json
 import logging
+import re
 import uuid
 from typing import Any
 
@@ -136,6 +140,24 @@ def build_relations(
                         relation_type="same_parent_section",
                     ))
 
+    # 5. Reference relations: TOC/anchor links -> referenced headings (v1.5)
+    # Only for segments that LLM/enrichment assessed as navigation content
+    for seg in segments:
+        assessment = seg.metadata_json.get("content_assessment", {})
+        if not assessment.get("is_navigation"):
+            continue
+        # Parse [text](#anchor) links from navigation segments
+        link_texts = re.findall(r'\[([^\]]+)\]\(#[^)]+\)', seg.raw_text)
+        for link_text in link_texts:
+            target = _find_heading_by_title(segments, link_text)
+            if target:
+                relations.append(SegmentRelationData(
+                    source_segment_key=_make_segment_key(seg),
+                    target_segment_key=_make_segment_key(target),
+                    relation_type="references",
+                    metadata_json={"source": "toc_link", "link_text": link_text},
+                ))
+
     return relations, seg_ids
 
 
@@ -158,6 +180,23 @@ def _parent_path_key(section_path: list[dict[str, Any]]) -> str:
     if len(section_path) <= 1:
         return "__root__"
     return _path_key(section_path[:-1])
+
+
+def _find_heading_by_title(
+    segments: list[RawSegmentData], target_title: str,
+) -> RawSegmentData | None:
+    """Find a heading segment whose section_title matches the link text."""
+    target_lower = target_title.lower().strip()
+    for seg in segments:
+        if seg.block_type == "heading" and seg.section_title:
+            if seg.section_title.lower().strip() == target_lower:
+                return seg
+    # Fallback: partial match
+    for seg in segments:
+        if seg.block_type == "heading" and seg.section_title:
+            if target_lower in seg.section_title.lower():
+                return seg
+    return None
 
 
 class DiscourseRelationBuilder:

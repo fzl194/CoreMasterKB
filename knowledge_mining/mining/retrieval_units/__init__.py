@@ -1,23 +1,20 @@
 """Retrieval units stage: build retrieval-ready units from segments.
 
-v1.3 industrial-grade density (2-2.5x, down from 7.8x):
+v1.5 industrial-grade: LLM-driven quality assessment, no hardcoded thresholds.
 
-Design principles (based on Anthropic Contextual Retrieval + industrial RAG):
+Design principles (LlamaIndex SchemaLLMPathExtractor + GraphRAG + Anthropic Contextual Retrieval):
+- LLM does intelligent content quality assessment (not regex + thresholds)
+- Schema constrains LLM output (not if-else chains)
+- Validate structure, prune invalid (not content quality scoring)
 - raw_text units are the primary evidence layer (1:1 with segments)
-- LLM context enriches raw_text.search_text (NOT a separate unit) — Anthropic pattern
-- entity_card only for strong types: command/protocol/network_element/parameter
-- generated_question capped at 1-2 per segment with answerability filtering
+- entity_card only for strong types from non-navigation segments
+- generated_question: LLM decides whether to generate (empty array = skip)
 - table_row units for per-row retrieval on structured tables
-
-Unit type hierarchy:
-- raw_text (60-70%): Primary retrieval evidence, enriched with section + LLM context
-- generated_question (15-20%): Recall-boosting questions (1-2 per chunk)
-- entity_card (5-10%): Strong entity lookup cards only
-- table_row (5-10%): Per-row retrieval for structured tables
 """
 from __future__ import annotations
 
 import logging
+import re
 import uuid
 from typing import Any, Protocol, runtime_checkable
 
@@ -269,6 +266,7 @@ def build_retrieval_units(
 
     strong_types = profile.strong_entity_types
     max_questions = profile.retrieval_policy.max_questions_per_segment
+    max_entity_cards = profile.retrieval_policy.max_entity_cards_per_segment
 
     qgen = question_generator or NoOpQuestionGenerator()
     ctxer = contextualizer or NoOpContextualizer()
@@ -280,7 +278,12 @@ def build_retrieval_units(
     qgen_task_ids: dict[str, str] = {}
     if qgen is not None:
         questionworthy = [s for s in segments if _is_questionworthy(s)]
-        question_map = qgen.generate_batch(questionworthy)
+        raw_question_map = qgen.generate_batch(questionworthy)
+        # v1.5: prune invalid questions from LLM output
+        for seg_key, questions in raw_question_map.items():
+            pruned = _prune_invalid_questions(questions)
+            if pruned:
+                question_map[seg_key] = pruned[:max_questions]
         if hasattr(qgen, "last_task_ids"):
             qgen_task_ids = qgen.last_task_ids
 
@@ -308,20 +311,28 @@ def build_retrieval_units(
         ctx_task_id = ctxer_task_ids.get(seg_key)
         units.append(_make_raw_text_unit(seg, source_seg_id, llm_context, ctx_task_id))
 
-        # 2. entity_card units — only strong types, deduped
+        # 2. entity_card units — only strong types, deduped, skip navigation segments
+        assessment = seg.metadata_json.get("content_assessment", {})
+        segment_card_count = 0
         for ref in seg.entity_refs_json:
             entity_type = ref.get("type", "")
             if entity_type not in strong_types:
+                continue
+            # v1.5: Skip entity cards from navigation segments (LLM assessment)
+            if assessment.get("is_navigation"):
                 continue
             entity_key = f"{entity_type}:{ref.get('name', '')}"
             if entity_key not in seen_entity_cards:
                 seen_entity_cards.add(entity_key)
                 units.append(_make_entity_card_unit(seg, ref, source_seg_id))
+                segment_card_count += 1
+                if segment_card_count >= max_entity_cards:
+                    break
 
         # 3. table_row units (per-row retrieval for structured tables)
         units.extend(_make_table_row_units(seg, source_seg_id))
 
-        # 4. generated_question units (capped by profile policy)
+        # 4. generated_question units (capped by profile policy, already pruned)
         questions = question_map.get(seg_key, [])
         q_task_id = qgen_task_ids.get(seg_key)
         for qi, question in enumerate(questions):
@@ -451,7 +462,8 @@ def _make_generated_question_unit(
     llm_task_id: str | None = None,
 ) -> RetrievalUnitData:
     """Generated question unit: one per LLM-generated question (max 2 per segment)."""
-    title = f"Q{question_index + 1}: {question[:60]}"
+    # v1.5: No Qn prefix — pure question text as title
+    title = question[:120]
     text = f"{question}\n---\n来源: {seg.section_title or '未知'}\n{seg.raw_text[:200]}"
     search_text = tokenize_for_search(f"{question} {seg.section_title or ''}")
     llm_refs: dict[str, Any] = {"source": "llm_runtime", "question_index": question_index}
@@ -568,17 +580,44 @@ def _build_source_refs(seg: RawSegmentData, source_seg_id: str | None = None) ->
 
 
 def _is_questionworthy(seg: RawSegmentData) -> bool:
-    """Filter segments that should receive question generation.
+    """Minimal universal gate — not configurable, not domain-specific.
 
-    Only substantial non-heading content gets questions.
+    Only skips segments that are universally not worth sending to LLM.
+    All content quality decisions are made BY the LLM, not by rules.
     """
+    # Universal: headings are structural, not content
     if seg.block_type == "heading":
         return False
+    # Universal: too short to contain meaningful information
     if seg.token_count is not None and seg.token_count < 10:
         return False
     if len(seg.raw_text.strip()) < 15:
         return False
+    # v1.5: If enrichment already assessed this segment as non-substantive, skip LLM call
+    assessment = seg.metadata_json.get("content_assessment", {})
+    if assessment and not assessment.get("is_substantive", True):
+        return False
     return True
+
+
+def _prune_invalid_questions(questions: list[str]) -> list[str]:
+    """Prune invalid questions from LLM output (LlamaIndex schema validation pattern).
+
+    Validates structure only, not content. The LLM already made content quality decisions.
+    """
+    valid: list[str] = []
+    for q in questions:
+        q = q.strip()
+        # Structural validation (not content quality — LLM already decided)
+        if len(q) < 5:
+            continue
+        # Strip Qn prefix if LLM added it (e.g. "Q1: How to...")
+        if q.startswith("Q") and len(q) > 1 and q[1].isdigit():
+            q = re.sub(r"^Q\d+\s*[:：]\s*", "", q)
+        if not q or len(q) < 5:
+            continue
+        valid.append(q)
+    return valid
 
 
 def _extract_entity_context(name: str, raw_text: str, window: int = 80) -> str:
