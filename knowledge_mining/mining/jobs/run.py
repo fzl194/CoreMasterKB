@@ -39,6 +39,7 @@ from knowledge_mining.mining.relations import DefaultRelationBuilder
 from knowledge_mining.mining.snapshot import select_or_create_snapshot
 from knowledge_mining.mining.publishing import assemble_build, classify_documents, publish_release
 from knowledge_mining.mining.extractors import RuleBasedEntityExtractor, DefaultRoleClassifier  # noqa: F401 — used for enrich
+from knowledge_mining.mining.domain_pack import DomainProfile, load_domain_pack
 from knowledge_mining.mining.pipeline import (
     DocumentContext, PipelineConfig, MiningPipeline,
     StreamingPipeline,
@@ -62,6 +63,7 @@ def run(
     embedding_base_url: str = "https://open.bigmodel.cn/api/paas/v4",
     embedding_dimensions: int = 2048,
     max_workers: int = 4,
+    domain_pack: str = "cloud_core_network",
 ) -> dict[str, Any]:
     """Execute the mining pipeline.
 
@@ -79,6 +81,7 @@ def run(
         embedding_model: Embedding model name (default: embedding-3).
         embedding_base_url: Zhipu embedding API base URL.
         embedding_dimensions: Embedding vector dimensions.
+        domain_pack: Domain pack ID to load (default: "cloud_core_network").
 
     Returns:
         Summary dict with run_id, counts, and status.
@@ -86,6 +89,9 @@ def run(
     input_path = Path(input_path)
     batch_params = batch_params or BatchParams()
     params = batch_params
+
+    # Load domain profile
+    profile = load_domain_pack(domain_pack)
 
     # Open databases
     asset_db = AssetCoreDB(asset_core_db_path)
@@ -97,7 +103,7 @@ def run(
     run_id = uuid.uuid4().hex
 
     # LLM integration: create question generator if URL provided
-    llm_services = _init_llm(llm_base_url, llm_bypass_proxy)
+    llm_services = _init_llm(llm_base_url, llm_bypass_proxy, profile)
 
     # Embedding integration: create ZhipuEmbeddingGenerator if key provided
     embedding_generator = _init_embedding(
@@ -108,7 +114,7 @@ def run(
         return _run_pipeline(
             asset_db, runtime_db, input_path, params, phase1_only, run_id,
             publish_on_partial_failure, llm_services, embedding_generator,
-            max_workers,
+            max_workers, profile,
         )
     except Exception as e:
         # Mark run as failed
@@ -168,17 +174,21 @@ def publish(
 # Internal pipeline implementation
 # ===================================================================
 
-def _init_llm(llm_base_url: str | None, bypass_proxy: bool = False) -> dict[str, Any] | None:
+def _init_llm(
+    llm_base_url: str | None,
+    bypass_proxy: bool = False,
+    profile: DomainProfile | None = None,
+) -> dict[str, Any] | None:
     """Initialize LLM services if URL provided.
 
-    Registers templates if llm_service is reachable.
+    Registers templates from profile if llm_service is reachable.
     Returns dict with question_generator, enricher, discourse_relation_builder, contextualizer, or None.
     """
     if not llm_base_url:
         return None
 
     from knowledge_mining.mining.llm_client import LlmClient
-    from knowledge_mining.mining.llm_templates import TEMPLATES
+    from knowledge_mining.mining.llm_templates import build_templates_from_profile
     from knowledge_mining.mining.retrieval_units import LlmQuestionGenerator
 
     client = LlmClient(base_url=llm_base_url, bypass_proxy=bypass_proxy)
@@ -186,12 +196,18 @@ def _init_llm(llm_base_url: str | None, bypass_proxy: bool = False) -> dict[str,
         logger.warning("LLM service at %s unreachable, proceeding without LLM", llm_base_url)
         return None
 
-    # Register templates (idempotent)
-    for tpl in TEMPLATES:
+    # Register templates from profile (idempotent)
+    if profile is None:
+        from knowledge_mining.mining.domain_pack import get_default_profile
+        profile = get_default_profile()
+    templates = build_templates_from_profile(profile)
+    for tpl in templates:
         client.register_template(tpl)
 
     result: dict[str, Any] = {
-        "question_generator": LlmQuestionGenerator(base_url=llm_base_url, bypass_proxy=bypass_proxy),
+        "question_generator": LlmQuestionGenerator(
+            base_url=llm_base_url, bypass_proxy=bypass_proxy, profile=profile,
+        ),
     }
 
     # v1.2: Try to create LlmEnricher if available
@@ -199,8 +215,9 @@ def _init_llm(llm_base_url: str | None, bypass_proxy: bool = False) -> dict[str,
         from knowledge_mining.mining.enrich import LlmEnricher
         result["enricher"] = LlmEnricher(
             base_url=llm_base_url,
-            fallback_enricher=RuleBasedEnricher(),
+            fallback_enricher=RuleBasedEnricher(profile=profile),
             bypass_proxy=bypass_proxy,
+            profile=profile,
         )
     except (ImportError, Exception):
         pass
@@ -256,10 +273,14 @@ def _run_pipeline(
     llm_services: dict[str, Any] | None = None,
     embedding_generator: Any | None = None,
     max_workers: int = 4,
+    profile: DomainProfile | None = None,
 ) -> dict[str, Any]:
     """Core pipeline logic. Assumes DBs are already open."""
     tracker = RuntimeTracker(runtime_db)
     llm = llm_services or {}
+    if profile is None:
+        from knowledge_mining.mining.domain_pack import get_default_profile
+        profile = get_default_profile()
 
     now = _utcnow()
 
@@ -287,12 +308,13 @@ def _run_pipeline(
     )
     asset_db.commit()
 
-    # Build pipeline config with pluggable operators
-    entity_extractor = RuleBasedEntityExtractor()
-    role_classifier = DefaultRoleClassifier()
+    # Build pipeline config with pluggable operators (profile-driven)
+    entity_extractor = RuleBasedEntityExtractor(profile=profile)
+    role_classifier = DefaultRoleClassifier(profile=profile)
     enricher = RuleBasedEnricher(
         entity_extractor=entity_extractor,
         role_classifier=role_classifier,
+        profile=profile,
     )
 
     pipeline_config = PipelineConfig(
@@ -304,6 +326,7 @@ def _run_pipeline(
         embedding_generator=embedding_generator,
         discourse_relation_builder=llm.get("discourse_relation_builder"),
         contextualizer=llm.get("contextualizer"),
+        domain_profile=profile,
     )
 
     committed_count = 0

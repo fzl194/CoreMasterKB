@@ -16,7 +16,12 @@ v1.2 can inject LLM-backed implementations without changing segmentation or retr
 from __future__ import annotations
 
 import re
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Protocol, TYPE_CHECKING, runtime_checkable
+
+from knowledge_mining.mining.models import VALID_SEMANTIC_ROLES, RawSegmentData
+
+if TYPE_CHECKING:
+    from knowledge_mining.mining.domain_pack import DomainProfile
 
 from knowledge_mining.mining.extractors import (
     DefaultRoleClassifier,
@@ -25,15 +30,6 @@ from knowledge_mining.mining.extractors import (
     RoleClassifier,
     RuleBasedEntityExtractor,
 )
-from knowledge_mining.mining.models import STRONG_ENTITY_TYPES, RawSegmentData
-
-_SCHEMA_SEMANTIC_ROLES = frozenset({
-    "concept", "parameter", "example", "note", "procedure_step",
-    "troubleshooting_step", "constraint", "alarm", "checklist", "unknown",
-})
-
-# Allowed entity types from LLM: 7 strong types + concept (metadata only)
-_ALLOWED_ENTITY_TYPES = STRONG_ENTITY_TYPES | {"concept"}
 
 
 @runtime_checkable
@@ -46,17 +42,35 @@ class Enricher(Protocol):
 class RuleBasedEnricher:
     """v1.1 default: rule-based entity extraction + role classification.
 
-    This is the formal understanding stage. It replaces the old approach where
-    extraction was done during segmentation.
+    Profile-driven: entity types, role rules, heading roles come from DomainProfile.
     """
 
     def __init__(
         self,
         entity_extractor: EntityExtractor | None = None,
         role_classifier: RoleClassifier | None = None,
+        profile: DomainProfile | None = None,
     ) -> None:
-        self._extractor = entity_extractor or RuleBasedEntityExtractor()
-        self._classifier = role_classifier or DefaultRoleClassifier()
+        self._profile = profile
+        self._extractor = entity_extractor or RuleBasedEntityExtractor(profile=profile)
+        self._classifier = role_classifier or DefaultRoleClassifier(profile=profile)
+
+        # Load heading role keywords and parameter column names from profile
+        self._heading_role_keywords = profile.heading_role_keywords if profile else ()
+        self._parameter_column_names: list[str] = []
+        if profile:
+            self._load_extra_config(profile)
+
+    def _load_extra_config(self, profile: DomainProfile) -> None:
+        from pathlib import Path
+        import yaml
+
+        packs_root = Path(__file__).resolve().parent.parent.parent / "domain_packs"
+        yaml_path = packs_root / profile.domain_id / "domain.yaml"
+        if yaml_path.exists():
+            with open(yaml_path, encoding="utf-8") as f:
+                data = yaml.safe_load(f)
+            self._parameter_column_names = data.get("parameter_column_names", [])
 
     def enrich(
         self,
@@ -66,7 +80,10 @@ class RuleBasedEnricher:
         """Apply entity extraction, role classification, and metadata enrichment."""
         result: list[RawSegmentData] = []
         for seg in segments:
-            result.append(_enrich_one(seg, self._extractor, self._classifier))
+            result.append(_enrich_one(
+                seg, self._extractor, self._classifier,
+                self._heading_role_keywords, self._parameter_column_names,
+            ))
         return result
 
     def enrich_batch(
@@ -83,6 +100,7 @@ def enrich_segments(
     *,
     entity_extractor: EntityExtractor | None = None,
     role_classifier: RoleClassifier | None = None,
+    profile: DomainProfile | None = None,
     context: dict[str, Any] | None = None,
 ) -> list[RawSegmentData]:
     """Apply enrichment to segments using the rule-based enricher.
@@ -93,6 +111,7 @@ def enrich_segments(
     enricher = RuleBasedEnricher(
         entity_extractor=entity_extractor,
         role_classifier=role_classifier,
+        profile=profile,
     )
     return enricher.enrich(segments)
 
@@ -109,10 +128,12 @@ class LlmEnricher:
         base_url: str = "http://localhost:8900",
         fallback_enricher: RuleBasedEnricher | None = None,
         bypass_proxy: bool = False,
+        profile: DomainProfile | None = None,
     ) -> None:
         from knowledge_mining.mining.llm_client import LlmClient
         self._client = LlmClient(base_url=base_url, bypass_proxy=bypass_proxy)
-        self._fallback = fallback_enricher or RuleBasedEnricher()
+        self._profile = profile
+        self._fallback = fallback_enricher or RuleBasedEnricher(profile=profile)
 
     def enrich(
         self,
@@ -130,6 +151,9 @@ class LlmEnricher:
         """Batch enrichment via LLM with rule-based fallback."""
         if not segments:
             return []
+
+        profile = self._profile
+        allowed_entity_types = profile.entity_types if profile else frozenset()
 
         # Phase 1: Submit all segments
         seg_tasks: dict[str, str] = {}  # str(idx) -> task_id
@@ -164,7 +188,7 @@ class LlmEnricher:
             fallback_idx = 0
             for idx, seg in enumerate(segments):
                 if idx in llm_results:
-                    result_segments.append(_apply_llm_result(seg, llm_results[idx]))
+                    result_segments.append(_apply_llm_result(seg, llm_results[idx], allowed_entity_types))
                 else:
                     if fallback_idx < len(enriched_fallback):
                         result_segments.append(enriched_fallback[fallback_idx])
@@ -173,12 +197,16 @@ class LlmEnricher:
                         result_segments.append(seg)
         else:
             for idx, seg in enumerate(segments):
-                result_segments.append(_apply_llm_result(seg, llm_results[idx]))
+                result_segments.append(_apply_llm_result(seg, llm_results[idx], allowed_entity_types))
 
         return result_segments
 
 
-def _apply_llm_result(seg: RawSegmentData, result: dict[str, Any]) -> RawSegmentData:
+def _apply_llm_result(
+    seg: RawSegmentData,
+    result: dict[str, Any],
+    allowed_entity_types: frozenset[str],
+) -> RawSegmentData:
     """Apply LLM enrichment result to a segment."""
     changes: dict[str, Any] = {}
 
@@ -188,7 +216,9 @@ def _apply_llm_result(seg: RawSegmentData, result: dict[str, Any]) -> RawSegment
         entity_refs = [
             {"type": e.get("type", "unknown"), "name": e.get("name", "")}
             for e in entities
-            if e.get("name") and e.get("type") in _ALLOWED_ENTITY_TYPES
+            if e.get("name") and (
+                not allowed_entity_types or e.get("type") in allowed_entity_types
+            )
         ]
         # Merge with existing entities
         existing = {(r["type"], r["name"]) for r in seg.entity_refs_json}
@@ -204,7 +234,7 @@ def _apply_llm_result(seg: RawSegmentData, result: dict[str, Any]) -> RawSegment
 
     # Extract semantic role
     role = result.get("semantic_role", "")
-    if role and role in _SCHEMA_SEMANTIC_ROLES and role != seg.semantic_role:
+    if role and role in VALID_SEMANTIC_ROLES and role != seg.semantic_role:
         changes["semantic_role"] = role
 
     # Extract document type hint
@@ -242,6 +272,8 @@ def _enrich_one(
     seg: RawSegmentData,
     extractor: EntityExtractor,
     classifier: RoleClassifier,
+    heading_role_keywords: tuple[tuple[list[str], str], ...],
+    parameter_column_names: list[str],
 ) -> RawSegmentData:
     """Enrich a single segment: entity extraction + role classification + metadata."""
     changes: dict[str, Any] = {}
@@ -253,7 +285,7 @@ def _enrich_one(
 
     # 1a. Add section-title-derived entities
     if seg.section_title:
-        entity_refs = _add_section_context_entities(seg.section_title, entity_refs)
+        entity_refs = _add_section_context_entities(seg.section_title, entity_refs, extractor)
 
     if entity_refs != list(seg.entity_refs_json):
         changes["entity_refs_json"] = entity_refs
@@ -270,12 +302,14 @@ def _enrich_one(
     # 3. Metadata enrichment
     meta = dict(seg.metadata_json)
     if seg.block_type == "heading" and seg.section_title:
-        meta["heading_role"] = _classify_heading_role(seg.section_title)
+        meta["heading_role"] = _classify_heading_role(seg.section_title, heading_role_keywords)
     if seg.block_type == "table" and structure_json:
         cols = structure_json.get("columns", [])
         if cols:
             meta["table_column_count"] = len(cols)
-            meta["table_has_parameter_column"] = any("参数" in c for c in cols)
+            meta["table_has_parameter_column"] = any(
+                pc in c for c in cols for pc in parameter_column_names
+            )
 
     if changes or meta != dict(seg.metadata_json):
         changes["metadata_json"] = meta
@@ -304,24 +338,17 @@ def _enrich_one(
 
 
 def _validate_semantic_role(role: str) -> str:
-    if role in _SCHEMA_SEMANTIC_ROLES:
+    if role in VALID_SEMANTIC_ROLES:
         return role
     return "unknown"
 
 
-_HEADING_ROLE_KEYWORDS: list[tuple[list[str], str]] = [
-    (["参数", "参数说明", "参数标识"], "parameter_definition"),
-    (["使用实例", "示例", "配置示例"], "example_section"),
-    (["操作步骤", "流程", "检查项"], "procedure_section"),
-    (["排障", "故障"], "troubleshooting_section"),
-    (["注意事项", "限制", "约束"], "constraint_section"),
-    (["概述", "简介", "功能"], "overview_section"),
-]
-
-
-def _classify_heading_role(title: str) -> str:
+def _classify_heading_role(
+    title: str,
+    heading_role_keywords: tuple[tuple[list[str], str], ...],
+) -> str:
     title_lower = title.lower()
-    for keywords, role in _HEADING_ROLE_KEYWORDS:
+    for keywords, role in heading_role_keywords:
         if any(kw.lower() in title_lower for kw in keywords):
             return role
     return "section"
@@ -330,16 +357,18 @@ def _classify_heading_role(title: str) -> str:
 def _add_section_context_entities(
     section_title: str,
     existing: list[dict[str, str]],
+    extractor: EntityExtractor,
 ) -> list[dict[str, str]]:
     """Add section-title-derived entities if not already present."""
     refs = list(existing)  # defensive copy
     seen = {(r["type"], r["name"]) for r in refs}
 
-    cmd_match = re.match(r"^(ADD|SHOW|MOD|DEL|DSP|LST|REG|DEREG)\s+(\S+)", section_title.upper())
-    if cmd_match:
-        cmd_name = f"{cmd_match.group(1)} {cmd_match.group(2)}"
-        key = ("command", cmd_name)
-        if key not in seen:
-            refs.append({"type": "command", "name": cmd_name})
+    # Use profile-driven extraction if available
+    if isinstance(extractor, RuleBasedEntityExtractor):
+        result = extractor.extract_from_section_title(section_title)
+        if result:
+            key = (result["type"], result["name"])
+            if key not in seen:
+                refs.append(result)
 
     return refs

@@ -101,6 +101,7 @@ class PipelineConfig:
     embedding_generator: Any | None = None  # EmbeddingGenerator Protocol
     discourse_relation_builder: Any | None = None  # DiscourseRelationBuilder
     contextualizer: Any | None = None  # Contextualizer Protocol
+    domain_profile: Any | None = None  # DomainProfile
 
 
 # ---------------------------------------------------------------------------
@@ -201,6 +202,7 @@ class MiningPipeline:
                 document_key=profile.document_key if profile else "",
                 question_generator=cfg.question_generator,
                 contextualizer=cfg.contextualizer,
+                profile=cfg.domain_profile,
             )
             ctx = ctx.with_updates(retrieval_units=tuple(units))
 
@@ -347,5 +349,6 @@ def retrieval_units_stage(ctx: DocumentContext, cfg: PipelineConfig) -> Document
         document_key=profile.document_key if profile else "",
         question_generator=cfg.question_generator,
         contextualizer=cfg.contextualizer,
+        profile=cfg.domain_profile,
     )
     return ctx.with_updates(retrieval_units=tuple(units))

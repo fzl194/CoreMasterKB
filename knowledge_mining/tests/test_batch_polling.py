@@ -33,6 +33,7 @@ class TestQuestionGeneratorBatchPolling:
         gen._client = MagicMock()
         gen._timeout = 30
         gen._last_task_ids = {}
+        gen._profile = None
 
         # Mock submit to return task_ids
         gen._client.submit_task.side_effect = [
@@ -70,6 +71,7 @@ class TestQuestionGeneratorBatchPolling:
         gen._client = MagicMock()
         gen._timeout = 30
         gen._last_task_ids = {}
+        gen._profile = None
 
         results = gen.generate_batch([])
         assert results == {}

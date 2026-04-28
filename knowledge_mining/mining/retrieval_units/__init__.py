@@ -21,20 +21,14 @@ import logging
 import uuid
 from typing import Any, Protocol, runtime_checkable
 
-from knowledge_mining.mining.models import STRONG_ENTITY_TYPES, RawSegmentData, RetrievalUnitData
+from knowledge_mining.mining.models import RawSegmentData, RetrievalUnitData
 from knowledge_mining.mining.text_utils import tokenize_for_search
+from knowledge_mining.mining.domain_pack import DomainProfile, get_default_profile
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
-
-# Only these entity types get dedicated cards — shared with enrich and models
-_STRONG_ENTITY_TYPES = STRONG_ENTITY_TYPES
-
-# Max generated questions per segment (down from unlimited)
-MAX_QUESTIONS_PER_SEGMENT = 2
+# Default values — overridden by DomainProfile.retrieval_policy
+_DEFAULT_MAX_QUESTIONS_PER_SEGMENT = 2
 
 
 # ---------------------------------------------------------------------------
@@ -84,14 +78,16 @@ class LlmQuestionGenerator:
     Results are capped at MAX_QUESTIONS_PER_SEGMENT.
     """
 
-    def __init__(self, base_url: str = "http://localhost:8900", timeout: int = 120, bypass_proxy: bool = False) -> None:
+    def __init__(self, base_url: str = "http://localhost:8900", timeout: int = 120, bypass_proxy: bool = False, profile: DomainProfile | None = None) -> None:
         from knowledge_mining.mining.llm_client import LlmClient
         self._client = LlmClient(base_url=base_url, bypass_proxy=bypass_proxy)
         self._timeout = timeout
         self._last_task_ids: dict[str, str] = {}
+        self._profile = profile
 
     def generate(self, segment: RawSegmentData) -> list[str]:
         """Single segment submit+poll (fallback)."""
+        max_q = (self._profile or get_default_profile()).retrieval_policy.max_questions_per_segment
         try:
             task_id = self._client.submit_task(
                 template_key="mining-question-gen",
@@ -109,7 +105,7 @@ class LlmQuestionGenerator:
             if items is None:
                 return []
             questions = [item["question"] for item in items if "question" in item]
-            return questions[:MAX_QUESTIONS_PER_SEGMENT]
+            return questions[:max_q]
         except Exception:
             return []
 
@@ -121,6 +117,8 @@ class LlmQuestionGenerator:
         """Batch: submit all tasks, then poll all results concurrently."""
         if not segments:
             return {}
+
+        max_q = (self._profile or get_default_profile()).retrieval_policy.max_questions_per_segment
 
         # Phase 1: Submit all tasks
         seg_tasks: dict[str, str] = {}
@@ -149,9 +147,9 @@ class LlmQuestionGenerator:
         results: dict[str, list[str]] = {}
         for seg_key, items in raw_results.items():
             questions = [item["question"] for item in items if "question" in item]
-            # Cap at MAX_QUESTIONS_PER_SEGMENT
+            # Cap at max_questions_per_segment from profile policy
             if questions:
-                results[seg_key] = questions[:MAX_QUESTIONS_PER_SEGMENT]
+                results[seg_key] = questions[:max_q]
 
         return results
 
@@ -245,14 +243,15 @@ def build_retrieval_units(
     document_key: str = "",
     question_generator: QuestionGenerator | None = None,
     contextualizer: Contextualizer | None = None,
+    profile: DomainProfile | None = None,
 ) -> list[RetrievalUnitData]:
     """Build retrieval units from segments.
 
     v1.3 strategy (2-2.5x density):
     1. raw_text: 1:1 with segment, search_text enriched with section + LLM context
-    2. entity_card: only for strong entity types
+    2. entity_card: only for strong entity types (from profile)
     3. table_row: per-row for table segments
-    4. generated_question: 1-2 per substantial segment
+    4. generated_question: 1-2 per substantial segment (from profile policy)
 
     Args:
         segments: Enriched segments to build units from.
@@ -260,9 +259,16 @@ def build_retrieval_units(
         document_key: Document key for unit naming.
         question_generator: Optional question generator (LLM-backed or NoOp).
         contextualizer: Optional contextualizer for search_text enrichment.
+        profile: DomainProfile for entity types and retrieval policy.
     """
     if not segments:
         return []
+
+    if profile is None:
+        profile = get_default_profile()
+
+    strong_types = profile.strong_entity_types
+    max_questions = profile.retrieval_policy.max_questions_per_segment
 
     qgen = question_generator or NoOpQuestionGenerator()
     ctxer = contextualizer or NoOpContextualizer()
@@ -305,7 +311,7 @@ def build_retrieval_units(
         # 2. entity_card units — only strong types, deduped
         for ref in seg.entity_refs_json:
             entity_type = ref.get("type", "")
-            if entity_type not in _STRONG_ENTITY_TYPES:
+            if entity_type not in strong_types:
                 continue
             entity_key = f"{entity_type}:{ref.get('name', '')}"
             if entity_key not in seen_entity_cards:
@@ -315,7 +321,7 @@ def build_retrieval_units(
         # 3. table_row units (per-row retrieval for structured tables)
         units.extend(_make_table_row_units(seg, source_seg_id))
 
-        # 4. generated_question units (capped at MAX_QUESTIONS_PER_SEGMENT)
+        # 4. generated_question units (capped by profile policy)
         questions = question_map.get(seg_key, [])
         q_task_id = qgen_task_ids.get(seg_key)
         for qi, question in enumerate(questions):
@@ -554,11 +560,10 @@ def _build_source_refs(seg: RawSegmentData, source_seg_id: str | None = None) ->
     refs: dict[str, Any] = {
         "document_key": seg.document_key,
         "segment_index": seg.segment_index,
+        "raw_segment_ids": [source_seg_id] if source_seg_id else [],
     }
     if seg.source_offsets_json:
         refs["offsets"] = seg.source_offsets_json
-    if source_seg_id:
-        refs["raw_segment_ids"] = [source_seg_id]
     return refs
 
 

@@ -46,13 +46,13 @@ class TestSourceRefsJson:
         assert refs["raw_segment_ids"] == ["seg-uuid-abc"]
 
     def test_no_raw_segment_ids_when_no_seg_id(self):
-        """source_refs_json should not have raw_segment_ids when seg_id is None."""
+        """source_refs_json should have empty raw_segment_ids when seg_id is None."""
         from knowledge_mining.mining.retrieval_units import _build_source_refs
 
         seg = RawSegmentData(document_key="doc:/test.md", segment_index=1)
         refs = _build_source_refs(seg)
 
-        assert "raw_segment_ids" not in refs
+        assert refs["raw_segment_ids"] == []
 
     def test_raw_text_unit_source_refs_in_pipeline(self, md_content):
         """Raw text units built through pipeline should have raw_segment_ids."""

@@ -416,11 +416,11 @@ class TestRetrievalUnits:
         assert refs["segment_index"] == 3
 
     def test_source_refs_without_segment_id(self):
-        """source_refs_json should not include raw_segment_ids when source_seg_id is None."""
+        """source_refs_json should have empty raw_segment_ids when source_seg_id is None."""
         from knowledge_mining.mining.retrieval_units import _build_source_refs
         seg = RawSegmentData(document_key="doc:/a.md", segment_index=1)
         refs = _build_source_refs(seg)
-        assert "raw_segment_ids" not in refs
+        assert refs["raw_segment_ids"] == []
 
     def test_generated_question_unit_has_task_id(self):
         """llm_result_refs_json should include task_id from LLM."""

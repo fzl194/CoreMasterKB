@@ -107,12 +107,9 @@ VALID_TARGET_TYPES = frozenset({
     "other",
 })
 
-# 7 strong entity types — only these get entity_card retrieval units.
-# "concept" is kept in entity_refs_json for metadata but does NOT get a card.
-STRONG_ENTITY_TYPES = frozenset({
-    "command", "network_element", "parameter",
-    "protocol", "interface", "alarm", "feature",
-})
+# Deprecated: use DomainProfile.strong_entity_types instead.
+# Kept as empty frozenset for backward compatibility; real values come from domain pack.
+STRONG_ENTITY_TYPES = frozenset()
 
 VALID_RUN_STATUSES = frozenset({
     "queued",
