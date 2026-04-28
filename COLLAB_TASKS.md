@@ -65,14 +65,16 @@
 - 状态：v1.2 实现完成，112 测试通过，已提交 handoff，待 Codex 审查
 - 当前阶段：v1.2 实现完成 / 等待审查
 - Claude：Claude Serving 已完成 v1.2 全量实现（P1×5 + P2×3 + LLM×3 + 自查修复×3），112 passed/1 skipped，提交 handoff
-- Codex：已补发本轮 bug-review，明确 `/search` 主链仍未真正进入 LLM normalizer/planner，需先修主链接入再推进后续演进
+- Codex：已发布工业级检索重构方案，要求 Serving 从单路 FTS5 API 升级为 Domain Pack 感知、Hybrid Retrieval、Rerank-first、Trace/Eval 完整的检索编排器
 - 管理员：已确认 Serving 需脱离旧 command/canonical 路径，按 Agent Knowledge Backend 重写
 - 计划文档：`docs/plans/2026-04-22-v12-agent-serving-impl-plan.md`
 - 交接文档：`docs/handoffs/2026-04-22-v12-agent-serving-claude-serving-handoff.md`
-- 审查文档：`docs/analysis/2026-04-22-v11-agent-serving-codex-review.md`
+- 审查文档：
+  - `docs/analysis/2026-04-22-v11-agent-serving-codex-review.md`
+  - `docs/analysis/2026-04-28-v12-agent-serving-industrial-retrieval-redesign-codex-review.md`
 - 修复文档：
 - 管理员文档：
-- 最新消息序号：MSG-20260423-181000-codex
+- 最新消息序号：MSG-20260428-210000-codex
 - 备注：主背景见 `README.md`、`docs/architecture/2026-04-21-coremasterkb-v1.1-architecture.md`、`.dev/2026-04-21-v1.1-database-complete-proposal.md` 与 `databases/asset_core` 契约。
 
 ## TASK-20260421-v11-agent-llm-runtime
