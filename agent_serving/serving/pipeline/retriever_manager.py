@@ -1,25 +1,32 @@
 """RetrieverManager — orchestrates multi-path retrieval.
 
-Dispatches query to one or more Retriever implementations concurrently,
-collects candidates from each, and deduplicates by ID.
+v2: Accepts RetrievalRoutePlan for dynamic route selection.
+Each candidate records score_chain.raw_score and score_chain.route_sources.
+Deduplication is deferred to the fusion stage.
+Supports query_embedding for dense_vector retrieval.
 """
 from __future__ import annotations
 
 import asyncio
 import logging
+from typing import Any
 
-from agent_serving.serving.schemas.models import QueryPlan, RetrievalCandidate
+from agent_serving.serving.schemas.models import (
+    QueryPlan,
+    RetrievalCandidate,
+    RetrievalRoutePlan,
+    ScoreChain,
+)
 from agent_serving.serving.retrieval.retriever import Retriever
 
 logger = logging.getLogger(__name__)
 
 
 class RetrieverManager:
-    """Manages multiple retriever paths and merges results.
+    """Manages multiple retriever paths and collects candidates.
 
-    Retriever selection is driven by QueryPlan.retriever_config.
-    Each retriever is registered with a name; the manager runs
-    the ones requested concurrently and returns merged candidates.
+    Retriever selection is driven by either QueryPlan (legacy) or
+    RetrievalRoutePlan (v2). Each retriever is registered with a name.
     """
 
     def __init__(self, retrievers: dict[str, Retriever] | None = None) -> None:
@@ -33,7 +40,7 @@ class RetrieverManager:
         plan: QueryPlan,
         snapshot_ids: list[str],
     ) -> list[RetrievalCandidate]:
-        """Run all configured retrievers concurrently and merge candidates."""
+        """Legacy retrieve: run all enabled retrievers from QueryPlan."""
         if not self._retrievers:
             return []
 
@@ -41,9 +48,54 @@ class RetrieverManager:
         if not enabled:
             enabled = list(self._retrievers.keys())
 
-        # Run retrievers concurrently
+        return await self._run_retrievers(enabled, plan, snapshot_ids)
+
+    async def retrieve_from_route_plan(
+        self,
+        route_plan: RetrievalRoutePlan,
+        snapshot_ids: list[str],
+        query_embedding: list[float] | None = None,
+    ) -> list[RetrievalCandidate]:
+        """v2 retrieve: run enabled routes from RetrievalRoutePlan."""
+        if not self._retrievers:
+            return []
+
+        enabled_routes = [r for r in route_plan.routes if r.enabled]
+        route_config = {r.name: r for r in enabled_routes}
+        enabled_names = [r.name for r in enabled_routes]
+        plan = QueryPlan()
+        return await self._run_retrievers(
+            enabled_names, plan, snapshot_ids,
+            route_config=route_config,
+            query_embedding=query_embedding,
+        )
+
+    async def _run_retrievers(
+        self,
+        enabled_names: list[str],
+        plan: QueryPlan,
+        snapshot_ids: list[str],
+        route_config: dict[str, Any] | None = None,
+        query_embedding: list[float] | None = None,
+    ) -> list[RetrievalCandidate]:
+        """Run specified retrievers concurrently."""
+        if not snapshot_ids:
+            return []
+
         async def _safe_retrieve(name: str, retriever: Retriever) -> list[RetrievalCandidate]:
             try:
+                # Use embedding-based retrieval for dense_vector if available
+                if (
+                    name == "dense_vector"
+                    and query_embedding is not None
+                    and hasattr(retriever, "retrieve_with_query")
+                ):
+                    top_k = 50
+                    if route_config and name in route_config:
+                        top_k = route_config[name].top_k
+                    return await retriever.retrieve_with_query(
+                        query_embedding, snapshot_ids, top_k,
+                    )
                 return await retriever.retrieve(plan, snapshot_ids)
             except asyncio.CancelledError:
                 raise
@@ -52,7 +104,7 @@ class RetrieverManager:
                 return []
 
         tasks = []
-        for name in enabled:
+        for name in enabled_names:
             retriever = self._retrievers.get(name)
             if not retriever:
                 logger.warning("Retriever '%s' not registered, skipping", name)
@@ -60,13 +112,24 @@ class RetrieverManager:
             tasks.append(_safe_retrieve(name, retriever))
 
         results = await asyncio.gather(*tasks)
-        all_candidates = [c for batch in results for c in batch]
 
-        # Deduplicate by retrieval_unit_id, keeping higher score
-        seen: dict[str, RetrievalCandidate] = {}
-        for c in all_candidates:
-            key = c.retrieval_unit_id
-            if key not in seen or c.score > seen[key].score:
-                seen[key] = c
+        # Collect all candidates, annotate with route_source
+        all_candidates: list[RetrievalCandidate] = []
+        for name, batch in zip(enabled_names, results):
+            for c in batch:
+                chain = c.score_chain or ScoreChain(
+                    raw_score=c.score,
+                    route_sources=[c.source or name],
+                )
+                sources = list(chain.route_sources)
+                if name not in sources:
+                    sources.append(name)
+                chain = chain.model_copy(update={
+                    "raw_score": c.score,
+                    "route_sources": sources,
+                })
+                all_candidates.append(c.model_copy(update={
+                    "score_chain": chain,
+                }))
 
-        return list(seen.values())
+        return all_candidates
