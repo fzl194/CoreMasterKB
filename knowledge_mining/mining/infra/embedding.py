@@ -125,3 +125,66 @@ class ZhipuEmbeddingGenerator:
             all_embeddings.extend(batch_result)
 
         return all_embeddings
+
+
+class LLMServiceEmbeddingGenerator:
+    """Embedding client backed by llm_service model endpoint."""
+
+    def __init__(
+        self,
+        *,
+        base_url: str = "http://localhost:8900",
+        model: str = "embedding-3",
+        dimensions: int = 2048,
+        timeout: int = 60,
+    ) -> None:
+        self._base_url = base_url.rstrip("/")
+        self._model = model
+        self._dimensions = dimensions
+        self._timeout = timeout
+
+    @property
+    def model_name(self) -> str:
+        return self._model
+
+    @property
+    def dimensions(self) -> int:
+        return self._dimensions
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        if not texts:
+            return []
+
+        payload: dict[str, Any] = {
+            "input": texts,
+            "model": self._model,
+            "dimensions": self._dimensions,
+        }
+        try:
+            with httpx.Client(base_url=self._base_url, timeout=self._timeout) as client:
+                resp = client.post("/api/v1/models/embeddings", json=payload)
+                resp.raise_for_status()
+                data = resp.json()
+            results = data.get("data", [])
+            results.sort(key=lambda x: x.get("index", 0))
+            return [item.get("embedding", []) for item in results]
+        except Exception as e:
+            logger.warning("LLM service embedding call failed: %s", e)
+            return []
+
+    def embed_batch(self, texts: list[str], batch_size: int = 32) -> list[list[float]]:
+        if not texts:
+            return []
+
+        all_embeddings: list[list[float]] = []
+        for i in range(0, len(texts), batch_size):
+            batch = texts[i : i + batch_size]
+            batch_result = self.embed(batch)
+            if len(batch_result) != len(batch):
+                logger.warning(
+                    "LLM service embedding batch mismatch: expected %d, got %d",
+                    len(batch), len(batch_result),
+                )
+                return []
+            all_embeddings.extend(batch_result)
+        return all_embeddings

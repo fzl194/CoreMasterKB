@@ -147,7 +147,7 @@ class ServingLlmClient:
         async with httpx.AsyncClient(timeout=self._timeout) as client:
             for tpl in SERVING_TEMPLATES:
                 try:
-                    resp = await client.post(f"{self._base_url}/templates", json=tpl)
+                    resp = await client.post(f"{self._base_url}/api/v1/templates", json=tpl)
                     if resp.status_code in (200, 201, 409):
                         logger.info("Registered template: %s", tpl["template_key"])
                     else:
@@ -176,9 +176,61 @@ class ServingLlmClient:
         kwargs.setdefault("caller_domain", "serving")
         await self.ensure_templates()
         async with httpx.AsyncClient(timeout=self._timeout) as client:
-            resp = await client.post(f"{self._base_url}/execute", json=kwargs)
+            resp = await client.post(f"{self._base_url}/api/v1/execute", json=kwargs)
             resp.raise_for_status()
             return resp.json()
+
+    async def embed(
+        self,
+        texts: list[str] | str,
+        *,
+        model: str | None = None,
+        dimensions: int | None = None,
+    ) -> dict | None:
+        payload: dict[str, Any] = {"input": texts}
+        if model is not None:
+            payload["model"] = model
+        if dimensions is not None:
+            payload["dimensions"] = dimensions
+        try:
+            async with httpx.AsyncClient(timeout=self._timeout) as client:
+                resp = await client.post(
+                    f"{self._base_url}/api/v1/models/embeddings",
+                    json=payload,
+                )
+                resp.raise_for_status()
+                return resp.json()
+        except Exception:
+            logger.warning("LLM service embedding call failed", exc_info=True)
+            return None
+
+    async def rerank(
+        self,
+        *,
+        query: str,
+        documents: list[str],
+        model: str | None = None,
+        top_n: int | None = None,
+    ) -> dict | None:
+        payload: dict[str, Any] = {
+            "query": query,
+            "documents": documents,
+        }
+        if model is not None:
+            payload["model"] = model
+        if top_n is not None:
+            payload["top_n"] = top_n
+        try:
+            async with httpx.AsyncClient(timeout=self._timeout) as client:
+                resp = await client.post(
+                    f"{self._base_url}/api/v1/models/rerank",
+                    json=payload,
+                )
+                resp.raise_for_status()
+                return resp.json()
+        except Exception:
+            logger.warning("LLM service rerank call failed", exc_info=True)
+            return None
 
     async def close(self) -> None:
         """No-op — httpx clients are created per-request."""

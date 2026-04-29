@@ -5,8 +5,8 @@ Each stage is traced via TraceCollector.
 
 Integrations:
 - LLM: QueryUnderstandingEngine (LLM-first, rule fallback)
-- Embedding: ZhipuEmbeddingGenerator for query → DenseVectorRetriever
-- Rerank: ZhipuReranker (model rerank) → LLMReranker → ScoreReranker (fallback chain)
+- Embedding: llm_service model endpoint preferred, direct embedding fallback retained
+- Rerank: llm_service model rerank → LLMReranker → ScoreReranker (fallback chain)
 """
 from __future__ import annotations
 
@@ -79,25 +79,36 @@ def _get_router() -> RetrievalRouter:
 
 
 def _get_rerank_pipeline(request: Request) -> RerankPipeline:
-    """Build cascading rerank pipeline: Zhipu → LLM → Score."""
-    # Model-based reranker (Zhipu rerank API)
+    """Build cascading rerank pipeline: shared model endpoint → LLM → Score."""
     model_reranker = None
-    api_key = os.environ.get("EMBEDDING_API_KEY")
-    if api_key:
+    llm_client = getattr(request.app.state, "llm_client", None)
+    if llm_client:
         try:
-            from agent_serving.serving.rerank.zhipu_reranker import ZhipuReranker
-            model_reranker = ZhipuReranker(
-                api_key=api_key,
-                base_url=os.environ.get(
-                    "EMBEDDING_BASE_URL", "https://open.bigmodel.cn/api/paas/v4",
-                ),
+            from agent_serving.serving.rerank.service_reranker import LLMServiceReranker
+            model_reranker = LLMServiceReranker(
+                llm_client=llm_client,
+                model=os.environ.get("RERANK_MODEL", "rerank"),
             )
         except Exception:
-            logger.warning("Failed to create ZhipuReranker", exc_info=True)
+            logger.warning("Failed to create LLMServiceReranker", exc_info=True)
+
+    if model_reranker is None:
+        api_key = os.environ.get("RERANK_API_KEY")
+        if api_key:
+            try:
+                from agent_serving.serving.rerank.zhipu_reranker import ZhipuReranker
+                model_reranker = ZhipuReranker(
+                    api_key=api_key,
+                    base_url=os.environ.get(
+                        "RERANK_BASE_URL", "https://open.bigmodel.cn/api/paas/v4",
+                    ),
+                    model=os.environ.get("RERANK_MODEL", "rerank"),
+                )
+            except Exception:
+                logger.warning("Failed to create ZhipuReranker", exc_info=True)
 
     # LLM-based reranker (via LLM service)
     llm_reranker = None
-    llm_client = getattr(request.app.state, "llm_client", None)
     if llm_client:
         try:
             from agent_serving.serving.rerank.llm_reranker import LLMReranker
@@ -115,16 +126,28 @@ def _get_rerank_pipeline(request: Request) -> RerankPipeline:
 async def _generate_query_embedding(
     request: Request, query: str,
 ) -> list[float] | None:
-    """Generate query embedding using ZhipuEmbeddingGenerator."""
+    """Generate query embedding via shared llm_service, fallback to direct client."""
+    llm_client = getattr(request.app.state, "llm_client", None)
+    if llm_client:
+        try:
+            response = await llm_client.embed(
+                [query],
+                model=os.environ.get("EMBEDDING_MODEL", "embedding-3"),
+                dimensions=int(os.environ.get("EMBEDDING_DIMENSIONS", "2048")),
+            )
+            if response and response.get("data"):
+                return response["data"][0]["embedding"]
+        except Exception:
+            logger.warning("LLM service query embedding failed", exc_info=True)
+
     embedding_gen = getattr(request.app.state, "embedding_generator", None)
-    if not embedding_gen:
-        return None
-    try:
-        embeddings = await asyncio.to_thread(embedding_gen.embed, [query])
-        if embeddings and len(embeddings) > 0:
-            return embeddings[0]
-    except Exception:
-        logger.warning("Query embedding generation failed", exc_info=True)
+    if embedding_gen:
+        try:
+            embeddings = await asyncio.to_thread(embedding_gen.embed, [query])
+            if embeddings and len(embeddings) > 0:
+                return embeddings[0]
+        except Exception:
+            logger.warning("Direct query embedding generation failed", exc_info=True)
     return None
 
 

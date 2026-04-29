@@ -107,7 +107,7 @@ def run(
 
     # Embedding integration: create ZhipuEmbeddingGenerator if key provided
     embedding_generator = _init_embedding(
-        embedding_api_key, embedding_model, embedding_base_url, embedding_dimensions,
+        llm_base_url, embedding_api_key, embedding_model, embedding_base_url, embedding_dimensions,
     )
 
     try:
@@ -244,12 +244,22 @@ def _init_llm(
 
 
 def _init_embedding(
+    llm_base_url: str | None,
     api_key: str | None,
     model: str = "embedding-3",
     base_url: str = "https://open.bigmodel.cn/api/paas/v4",
     dimensions: int = 2048,
 ) -> Any | None:
-    """Initialize ZhipuEmbeddingGenerator if API key is provided."""
+    """Prefer shared llm_service embedding endpoint, fallback to direct Zhipu client."""
+    if llm_base_url:
+        from knowledge_mining.mining.infra.embedding import LLMServiceEmbeddingGenerator
+
+        return LLMServiceEmbeddingGenerator(
+            base_url=llm_base_url,
+            model=model,
+            dimensions=dimensions,
+        )
+
     if not api_key:
         return None
 
