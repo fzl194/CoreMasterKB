@@ -82,6 +82,25 @@ class QueryPlan(BaseModel):
     reranker_config: RerankerConfig = Field(default_factory=RerankerConfig)
 
 
+# --- Retrieval Query (v1.3 — replaces empty QueryPlan in retrieval) ---
+
+
+class RetrievalQuery(BaseModel):
+    """Rich query context — carries full semantics to each retriever.
+
+    Modeled after LlamaIndex QueryBundle: carries query text, keywords,
+    entities, embedding, and scope in a single structured object.
+    Each retriever extracts only what it needs from this object.
+    """
+    original_query: str
+    keywords: list[str] = Field(default_factory=list)
+    entities: list[EntityRef] = Field(default_factory=list)
+    query_embedding: list[float] | None = None
+    sub_queries: list[str] = Field(default_factory=list)
+    intent: str = "general"
+    scope: dict = Field(default_factory=dict)
+
+
 # --- Retrieval ---
 
 class RetrievalCandidate(BaseModel):
