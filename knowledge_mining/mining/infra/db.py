@@ -1,20 +1,22 @@
-"""Dual-database adapter for v1.1 Mining pipeline.
+"""Dual-database adapter for Mining v3.0 — PostgreSQL backend.
 
 Provides two independent adapters:
-- AssetCoreDB — reads/writes asset_core.sqlite (documents, snapshots, segments, retrieval units, builds, releases)
-- MiningRuntimeDB — reads/writes mining_runtime.sqlite (runs, run_documents, stage_events)
+- AssetCoreDB — reads/writes asset_core tables (documents, snapshots, segments, retrieval units, builds, releases)
+- MiningRuntimeDB — reads/writes mining_runtime tables (runs, run_documents, stage_events)
 
-Both adapters read DDL from the canonical SQL schema files under databases/
-and expose typed CRUD operations for each table.
+Both adapters use psycopg[pool] ConnectionPool for connection management.
+Public method signatures are identical to the SQLite version.
 """
 from __future__ import annotations
 
 import json
-import sqlite3
 import uuid
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
+
+import psycopg
+from psycopg.rows import dict_row
+from psycopg_pool import ConnectionPool
 
 from ..contracts.models import (
     MiningRunData,
@@ -26,9 +28,9 @@ from ..contracts.models import (
 # Paths
 # ---------------------------------------------------------------------------
 
+from pathlib import Path
+
 _REPO_ROOT = Path(__file__).resolve().parents[3]  # knowledge_mining/mining/infra/ -> CoreMasterKB/
-_ASSET_CORE_DDL = _REPO_ROOT / "databases" / "asset_core" / "schemas" / "001_asset_core.sqlite.sql"
-_MINING_RUNTIME_DDL = _REPO_ROOT / "databases" / "mining_runtime" / "schemas" / "001_mining_runtime.sqlite.sql"
 
 
 def _utcnow() -> str:
@@ -45,62 +47,75 @@ def _json_dumps(obj: Any) -> str:
     return json.dumps(obj, ensure_ascii=False, separators=(",", ":"))
 
 
-def _json_loads(raw: str) -> Any:
+def _json_loads(raw: str | None) -> Any:
     if not raw:
         return {}
+    if isinstance(raw, dict):
+        return raw
     return json.loads(raw)
 
 
 # ---------------------------------------------------------------------------
-# Base helper
+# Base helper — PostgreSQL with ConnectionPool
 # ---------------------------------------------------------------------------
 
 class _DB:
-    """Thin SQLite connection wrapper that auto-initializes from a DDL file."""
+    """PostgreSQL database adapter using ConnectionPool."""
 
-    def __init__(self, db_path: str | Path, ddl_path: Path) -> None:
-        self.db_path = Path(db_path)
-        self._ddl_path = ddl_path
-        self._conn: sqlite3.Connection | None = None
+    def __init__(self, pool: ConnectionPool) -> None:
+        self._pool = pool
 
-    # -- connection lifecycle --
+    @classmethod
+    def from_conninfo(cls, conninfo: str, *, pool_min: int = 2, pool_max: int = 10) -> "_DB":
+        """Create adapter from a connection string."""
+        pool = ConnectionPool(
+            conninfo,
+            min_size=pool_min,
+            max_size=pool_max,
+            open=False,
+            kwargs={"row_factory": dict_row},
+        )
+        return cls(pool)
 
     def open(self) -> None:
-        if self._conn is not None:
-            return
-        # Ensure parent directory exists
-        Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(str(self.db_path))
-        self._conn.execute("PRAGMA journal_mode=WAL")
-        self._conn.execute("PRAGMA foreign_keys=ON")
-        self._conn.row_factory = sqlite3.Row
-        ddl = self._ddl_path.read_text(encoding="utf-8")
-        self._conn.executescript(ddl)
+        """Open the connection pool."""
+        self._pool.open()
 
     def close(self) -> None:
-        if self._conn is not None:
-            self._conn.close()
-            self._conn = None
+        """Close the connection pool."""
+        self._pool.close()
 
     @property
-    def conn(self) -> sqlite3.Connection:
-        if self._conn is None:
-            raise RuntimeError("DB not opened — call .open() first")
-        return self._conn
+    def pool(self) -> ConnectionPool:
+        return self._pool
+
+    def _get_conn(self) -> psycopg.Connection:
+        return self._pool.getconn()
+
+    def _put_conn(self, conn: psycopg.Connection) -> None:
+        self._pool.putconn(conn)
 
     # -- helpers --
 
-    def _execute(self, sql: str, params: tuple = ()) -> sqlite3.Cursor:
-        return self.conn.execute(sql, params)
+    def _execute(self, sql: str, params: tuple = ()) -> None:
+        with self._pool.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, params)
 
-    def _fetchone(self, sql: str, params: tuple = ()) -> sqlite3.Row | None:
-        return self._execute(sql, params).fetchone()
+    def _fetchone(self, sql: str, params: tuple = ()) -> dict[str, Any] | None:
+        with self._pool.connection() as conn:
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(sql, params)
+                return cur.fetchone()
 
-    def _fetchall(self, sql: str, params: tuple = ()) -> list[sqlite3.Row]:
-        return self._execute(sql, params).fetchall()
+    def _fetchall(self, sql: str, params: tuple = ()) -> list[dict[str, Any]]:
+        with self._pool.connection() as conn:
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(sql, params)
+                return cur.fetchall()
 
     def commit(self) -> None:
-        self.conn.commit()
+        """No-op: each _execute auto-commits via context manager."""
 
 
 # ===================================================================
@@ -108,10 +123,7 @@ class _DB:
 # ===================================================================
 
 class AssetCoreDB(_DB):
-    """Adapter for asset_core.sqlite — Mining writes content assets here."""
-
-    def __init__(self, db_path: str | Path) -> None:
-        super().__init__(db_path, _ASSET_CORE_DDL)
+    """Adapter for asset_core tables — Mining writes content assets here."""
 
     # -- source batches --
 
@@ -127,17 +139,17 @@ class AssetCoreDB(_DB):
         now = _utcnow()
         self._execute(
             """INSERT INTO asset_source_batches (id, batch_code, source_type, description, created_by, created_at, metadata_json)
-               VALUES (?, ?, ?, ?, ?, ?, ?)
+               VALUES (%s, %s, %s, %s, %s, %s, %s)
                ON CONFLICT(id) DO UPDATE SET batch_code=excluded.batch_code, source_type=excluded.source_type""",
             (batch_id, batch_code, source_type, description, created_by, now, _json_dumps(metadata_json)),
         )
         return batch_id
 
-    def get_source_batch(self, batch_id: str) -> sqlite3.Row | None:
-        return self._fetchone("SELECT * FROM asset_source_batches WHERE id = ?", (batch_id,))
+    def get_source_batch(self, batch_id: str) -> dict[str, Any] | None:
+        return self._fetchone("SELECT * FROM asset_source_batches WHERE id = %s", (batch_id,))
 
-    def find_batch_by_code(self, batch_code: str) -> sqlite3.Row | None:
-        return self._fetchone("SELECT * FROM asset_source_batches WHERE batch_code = ?", (batch_code,))
+    def find_batch_by_code(self, batch_code: str) -> dict[str, Any] | None:
+        return self._fetchone("SELECT * FROM asset_source_batches WHERE batch_code = %s", (batch_code,))
 
     # -- documents --
 
@@ -152,22 +164,21 @@ class AssetCoreDB(_DB):
         now = _utcnow()
         self._execute(
             """INSERT INTO asset_documents (id, document_key, document_name, document_type, metadata_json, created_at)
-               VALUES (?, ?, ?, ?, ?, ?)
+               VALUES (%s, %s, %s, %s, %s, %s)
                ON CONFLICT(document_key) DO UPDATE SET
                    document_name = COALESCE(excluded.document_name, asset_documents.document_name),
                    document_type = COALESCE(excluded.document_type, asset_documents.document_type),
                    metadata_json = excluded.metadata_json""",
             (document_id, document_key, document_name, document_type, _json_dumps(metadata_json), now),
         )
-        # ON CONFLICT may keep the OLD id — read back the actual row id
-        row = self._fetchone("SELECT id FROM asset_documents WHERE document_key = ?", (document_key,))
+        row = self._fetchone("SELECT id FROM asset_documents WHERE document_key = %s", (document_key,))
         return row["id"] if row else document_id
 
-    def get_document_by_key(self, document_key: str) -> sqlite3.Row | None:
-        return self._fetchone("SELECT * FROM asset_documents WHERE document_key = ?", (document_key,))
+    def get_document_by_key(self, document_key: str) -> dict[str, Any] | None:
+        return self._fetchone("SELECT * FROM asset_documents WHERE document_key = %s", (document_key,))
 
-    def get_document(self, document_id: str) -> sqlite3.Row | None:
-        return self._fetchone("SELECT * FROM asset_documents WHERE id = ?", (document_id,))
+    def get_document(self, document_id: str) -> dict[str, Any] | None:
+        return self._fetchone("SELECT * FROM asset_documents WHERE id = %s", (document_id,))
 
     # -- snapshots --
 
@@ -188,7 +199,7 @@ class AssetCoreDB(_DB):
             """INSERT INTO asset_document_snapshots
                    (id, normalized_content_hash, raw_content_hash, mime_type, title,
                     scope_json, tags_json, parser_profile_json, metadata_json, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                ON CONFLICT(normalized_content_hash) DO UPDATE SET
                    raw_content_hash = excluded.raw_content_hash,
                    title = COALESCE(excluded.title, asset_document_snapshots.title)""",
@@ -198,21 +209,20 @@ class AssetCoreDB(_DB):
                 _json_dumps(parser_profile_json), _json_dumps(metadata_json), now,
             ),
         )
-        # ON CONFLICT may keep the OLD id — read back the actual row id
         row = self._fetchone(
-            "SELECT id FROM asset_document_snapshots WHERE normalized_content_hash = ?",
+            "SELECT id FROM asset_document_snapshots WHERE normalized_content_hash = %s",
             (normalized_content_hash,),
         )
         return row["id"] if row else snapshot_id
 
-    def get_snapshot_by_hash(self, normalized_content_hash: str) -> sqlite3.Row | None:
+    def get_snapshot_by_hash(self, normalized_content_hash: str) -> dict[str, Any] | None:
         return self._fetchone(
-            "SELECT * FROM asset_document_snapshots WHERE normalized_content_hash = ?",
+            "SELECT * FROM asset_document_snapshots WHERE normalized_content_hash = %s",
             (normalized_content_hash,),
         )
 
-    def get_snapshot(self, snapshot_id: str) -> sqlite3.Row | None:
-        return self._fetchone("SELECT * FROM asset_document_snapshots WHERE id = ?", (snapshot_id,))
+    def get_snapshot(self, snapshot_id: str) -> dict[str, Any] | None:
+        return self._fetchone("SELECT * FROM asset_document_snapshots WHERE id = %s", (snapshot_id,))
 
     # -- snapshot links --
 
@@ -234,7 +244,7 @@ class AssetCoreDB(_DB):
             """INSERT INTO asset_document_snapshot_links
                    (id, document_id, document_snapshot_id, source_batch_id, relative_path,
                     source_uri, title, scope_json, tags_json, linked_at, metadata_json)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
             (
                 link_id, document_id, document_snapshot_id, source_batch_id, relative_path,
                 source_uri, title, _json_dumps(scope_json), _json_dumps(tags_json), now,
@@ -243,16 +253,15 @@ class AssetCoreDB(_DB):
         )
         return link_id
 
-    def get_active_link(self, document_id: str) -> sqlite3.Row | None:
-        """Get the most recent snapshot link for a document."""
+    def get_active_link(self, document_id: str) -> dict[str, Any] | None:
         return self._fetchone(
-            "SELECT * FROM asset_document_snapshot_links WHERE document_id = ? ORDER BY linked_at DESC LIMIT 1",
+            "SELECT * FROM asset_document_snapshot_links WHERE document_id = %s ORDER BY linked_at DESC LIMIT 1",
             (document_id,),
         )
 
-    def get_links_by_snapshot(self, snapshot_id: str) -> list[sqlite3.Row]:
+    def get_links_by_snapshot(self, snapshot_id: str) -> list[dict[str, Any]]:
         return self._fetchall(
-            "SELECT * FROM asset_document_snapshot_links WHERE document_snapshot_id = ?",
+            "SELECT * FROM asset_document_snapshot_links WHERE document_snapshot_id = %s",
             (snapshot_id,),
         )
 
@@ -284,7 +293,7 @@ class AssetCoreDB(_DB):
                    (id, document_snapshot_id, segment_key, segment_index, block_type, semantic_role,
                     section_path, section_title, raw_text, normalized_text, content_hash, normalized_hash,
                     token_count, structure_json, source_offsets_json, entity_refs_json, metadata_json)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
             (
                 segment_id, document_snapshot_id, segment_key, segment_index, block_type, semantic_role,
                 sp, section_title, raw_text, normalized_text, content_hash, normalized_hash,
@@ -295,21 +304,23 @@ class AssetCoreDB(_DB):
         return segment_id
 
     def delete_segments_by_snapshot(self, document_snapshot_id: str) -> int:
-        cur = self._execute(
-            "DELETE FROM asset_raw_segments WHERE document_snapshot_id = ?",
-            (document_snapshot_id,),
-        )
-        return cur.rowcount
+        with self._pool.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM asset_raw_segments WHERE document_snapshot_id = %s",
+                    (document_snapshot_id,),
+                )
+                return cur.rowcount
 
-    def get_segments_by_snapshot(self, document_snapshot_id: str) -> list[sqlite3.Row]:
+    def get_segments_by_snapshot(self, document_snapshot_id: str) -> list[dict[str, Any]]:
         return self._fetchall(
-            "SELECT * FROM asset_raw_segments WHERE document_snapshot_id = ? ORDER BY segment_index",
+            "SELECT * FROM asset_raw_segments WHERE document_snapshot_id = %s ORDER BY segment_index",
             (document_snapshot_id,),
         )
 
     def count_segments_by_snapshot(self, document_snapshot_id: str) -> int:
         row = self._fetchone(
-            "SELECT COUNT(*) as cnt FROM asset_raw_segments WHERE document_snapshot_id = ?",
+            "SELECT COUNT(*) as cnt FROM asset_raw_segments WHERE document_snapshot_id = %s",
             (document_snapshot_id,),
         )
         return row["cnt"] if row else 0
@@ -332,7 +343,7 @@ class AssetCoreDB(_DB):
             """INSERT INTO asset_raw_segment_relations
                    (id, document_snapshot_id, source_segment_id, target_segment_id,
                     relation_type, weight, confidence, distance, metadata_json)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)""",
             (
                 relation_id, document_snapshot_id, source_segment_id, target_segment_id,
                 relation_type, weight, confidence, distance, _json_dumps(metadata_json),
@@ -341,15 +352,17 @@ class AssetCoreDB(_DB):
         return relation_id
 
     def delete_relations_by_snapshot(self, document_snapshot_id: str) -> int:
-        cur = self._execute(
-            "DELETE FROM asset_raw_segment_relations WHERE document_snapshot_id = ?",
-            (document_snapshot_id,),
-        )
-        return cur.rowcount
+        with self._pool.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM asset_raw_segment_relations WHERE document_snapshot_id = %s",
+                    (document_snapshot_id,),
+                )
+                return cur.rowcount
 
-    def get_relations_by_snapshot(self, document_snapshot_id: str) -> list[sqlite3.Row]:
+    def get_relations_by_snapshot(self, document_snapshot_id: str) -> list[dict[str, Any]]:
         return self._fetchall(
-            "SELECT * FROM asset_raw_segment_relations WHERE document_snapshot_id = ?",
+            "SELECT * FROM asset_raw_segment_relations WHERE document_snapshot_id = %s",
             (document_snapshot_id,),
         )
 
@@ -383,7 +396,7 @@ class AssetCoreDB(_DB):
                     title, text, search_text, block_type, semantic_role,
                     facets_json, entity_refs_json, source_refs_json, llm_result_refs_json,
                     source_segment_id, weight, created_at, metadata_json)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
             (
                 unit_id, document_snapshot_id, unit_key, unit_type, target_type,
                 _json_dumps(target_ref_json), title, text, search_text, block_type, semantic_role,
@@ -395,15 +408,17 @@ class AssetCoreDB(_DB):
         return unit_id
 
     def delete_retrieval_units_by_snapshot(self, document_snapshot_id: str) -> int:
-        cur = self._execute(
-            "DELETE FROM asset_retrieval_units WHERE document_snapshot_id = ?",
-            (document_snapshot_id,),
-        )
-        return cur.rowcount
+        with self._pool.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM asset_retrieval_units WHERE document_snapshot_id = %s",
+                    (document_snapshot_id,),
+                )
+                return cur.rowcount
 
-    def get_retrieval_units_by_snapshot(self, document_snapshot_id: str) -> list[sqlite3.Row]:
+    def get_retrieval_units_by_snapshot(self, document_snapshot_id: str) -> list[dict[str, Any]]:
         return self._fetchall(
-            "SELECT * FROM asset_retrieval_units WHERE document_snapshot_id = ?",
+            "SELECT * FROM asset_retrieval_units WHERE document_snapshot_id = %s",
             (document_snapshot_id,),
         )
 
@@ -427,7 +442,7 @@ class AssetCoreDB(_DB):
                    (id, retrieval_unit_id, embedding_model, embedding_provider,
                     text_kind, embedding_dim, embedding_vector, content_hash,
                     created_at, metadata_json)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
             (
                 embedding_id, retrieval_unit_id, embedding_model, embedding_provider,
                 text_kind, embedding_dim, embedding_vector, content_hash,
@@ -455,7 +470,7 @@ class AssetCoreDB(_DB):
             """INSERT INTO asset_builds
                    (id, build_code, status, build_mode, source_batch_id, parent_build_id,
                     mining_run_id, summary_json, validation_json, created_at, finished_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)""",
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NULL)""",
             (
                 build_id, build_code, status, build_mode, source_batch_id, parent_build_id,
                 mining_run_id, _json_dumps(summary_json), _json_dumps(validation_json), now,
@@ -473,18 +488,17 @@ class AssetCoreDB(_DB):
     ) -> None:
         fa = finished_at or _utcnow()
         self._execute(
-            """UPDATE asset_builds SET status = ?, finished_at = ?,
-               summary_json = COALESCE(?, summary_json),
-               validation_json = COALESCE(?, validation_json)
-               WHERE id = ?""",
+            """UPDATE asset_builds SET status = %s, finished_at = %s,
+               summary_json = COALESCE(%s, summary_json),
+               validation_json = COALESCE(%s, validation_json)
+               WHERE id = %s""",
             (status, fa, _json_dumps(summary_json), _json_dumps(validation_json), build_id),
         )
 
-    def get_build(self, build_id: str) -> sqlite3.Row | None:
-        return self._fetchone("SELECT * FROM asset_builds WHERE id = ?", (build_id,))
+    def get_build(self, build_id: str) -> dict[str, Any] | None:
+        return self._fetchone("SELECT * FROM asset_builds WHERE id = %s", (build_id,))
 
-    def get_active_build(self) -> sqlite3.Row | None:
-        """Get the latest active/validated build (for incremental merge)."""
+    def get_active_build(self) -> dict[str, Any] | None:
         return self._fetchone(
             "SELECT * FROM asset_builds WHERE status IN ('validated', 'published') ORDER BY created_at DESC LIMIT 1"
         )
@@ -503,7 +517,7 @@ class AssetCoreDB(_DB):
         self._execute(
             """INSERT INTO asset_build_document_snapshots
                    (build_id, document_id, document_snapshot_id, selection_status, reason, metadata_json)
-               VALUES (?, ?, ?, ?, ?, ?)
+               VALUES (%s, %s, %s, %s, %s, %s)
                ON CONFLICT(build_id, document_id) DO UPDATE SET
                    document_snapshot_id = excluded.document_snapshot_id,
                    selection_status = excluded.selection_status,
@@ -512,9 +526,9 @@ class AssetCoreDB(_DB):
             (build_id, document_id, document_snapshot_id, selection_status, reason, _json_dumps(metadata_json)),
         )
 
-    def get_build_snapshots(self, build_id: str) -> list[sqlite3.Row]:
+    def get_build_snapshots(self, build_id: str) -> list[dict[str, Any]]:
         return self._fetchall(
-            "SELECT * FROM asset_build_document_snapshots WHERE build_id = ?",
+            "SELECT * FROM asset_build_document_snapshots WHERE build_id = %s",
             (build_id,),
         )
 
@@ -536,7 +550,7 @@ class AssetCoreDB(_DB):
             """INSERT INTO asset_publish_releases
                    (id, release_code, build_id, channel, status, previous_release_id,
                     released_by, release_notes, metadata_json)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)""",
             (
                 release_id, release_code, build_id, channel, status, previous_release_id,
                 released_by, release_notes, _json_dumps(metadata_json),
@@ -545,30 +559,28 @@ class AssetCoreDB(_DB):
         return release_id
 
     def activate_release(self, release_id: str) -> None:
-        """Activate a release: retire any current active, then set this one active."""
         now = _utcnow()
-        # retire current active for same channel
-        release = self._fetchone("SELECT channel FROM asset_publish_releases WHERE id = ?", (release_id,))
+        release = self._fetchone("SELECT channel FROM asset_publish_releases WHERE id = %s", (release_id,))
         if release is None:
             raise ValueError(f"Release {release_id} not found")
         channel = release["channel"]
         self._execute(
-            "UPDATE asset_publish_releases SET status = 'retired', deactivated_at = ? WHERE channel = ? AND status = 'active'",
+            "UPDATE asset_publish_releases SET status = 'retired', deactivated_at = %s WHERE channel = %s AND status = 'active'",
             (now, channel),
         )
         self._execute(
-            "UPDATE asset_publish_releases SET status = 'active', activated_at = ? WHERE id = ?",
+            "UPDATE asset_publish_releases SET status = 'active', activated_at = %s WHERE id = %s",
             (now, release_id),
         )
 
-    def get_active_release(self, channel: str = "default") -> sqlite3.Row | None:
+    def get_active_release(self, channel: str = "default") -> dict[str, Any] | None:
         return self._fetchone(
-            "SELECT * FROM asset_publish_releases WHERE channel = ? AND status = 'active'",
+            "SELECT * FROM asset_publish_releases WHERE channel = %s AND status = 'active'",
             (channel,),
         )
 
-    def get_release(self, release_id: str) -> sqlite3.Row | None:
-        return self._fetchone("SELECT * FROM asset_publish_releases WHERE id = ?", (release_id,))
+    def get_release(self, release_id: str) -> dict[str, Any] | None:
+        return self._fetchone("SELECT * FROM asset_publish_releases WHERE id = %s", (release_id,))
 
 
 # ===================================================================
@@ -576,10 +588,7 @@ class AssetCoreDB(_DB):
 # ===================================================================
 
 class MiningRuntimeDB(_DB):
-    """Adapter for mining_runtime.sqlite — Mining process-state truth source."""
-
-    def __init__(self, db_path: str | Path) -> None:
-        super().__init__(db_path, _MINING_RUNTIME_DDL)
+    """Adapter for mining_runtime tables — Mining process-state truth source."""
 
     # -- mining runs --
 
@@ -590,7 +599,7 @@ class MiningRuntimeDB(_DB):
                     total_documents, new_count, updated_count, skipped_count,
                     failed_count, committed_count, started_at, finished_at,
                     error_summary, metadata_json)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
             (
                 data.id, data.source_batch_id, data.input_path, data.status, data.build_id,
                 data.total_documents, data.new_count, data.updated_count, data.skipped_count,
@@ -610,31 +619,31 @@ class MiningRuntimeDB(_DB):
         metadata_json: dict | None = None,
         **counters: int,
     ) -> None:
-        parts = ["status = ?"]
+        parts = ["status = %s"]
         params: list[Any] = [status]
         if finished_at is not None:
-            parts.append("finished_at = ?")
+            parts.append("finished_at = %s")
             params.append(finished_at)
         if error_summary is not None:
-            parts.append("error_summary = ?")
+            parts.append("error_summary = %s")
             params.append(error_summary)
         if build_id is not None:
-            parts.append("build_id = ?")
+            parts.append("build_id = %s")
             params.append(build_id)
         if metadata_json is not None:
-            parts.append("metadata_json = ?")
+            parts.append("metadata_json = %s")
             params.append(_json_dumps(metadata_json))
         for col in ("total_documents", "new_count", "updated_count", "skipped_count", "failed_count", "committed_count"):
             if col in counters:
-                parts.append(f"{col} = ?")
+                parts.append(f"{col} = %s")
                 params.append(counters[col])
         params.append(run_id)
-        self._execute(f"UPDATE mining_runs SET {', '.join(parts)} WHERE id = ?", tuple(params))
+        self._execute(f"UPDATE mining_runs SET {', '.join(parts)} WHERE id = %s", tuple(params))
 
-    def get_run(self, run_id: str) -> sqlite3.Row | None:
-        return self._fetchone("SELECT * FROM mining_runs WHERE id = ?", (run_id,))
+    def get_run(self, run_id: str) -> dict[str, Any] | None:
+        return self._fetchone("SELECT * FROM mining_runs WHERE id = %s", (run_id,))
 
-    def get_interrupted_runs(self) -> list[sqlite3.Row]:
+    def get_interrupted_runs(self) -> list[dict[str, Any]]:
         return self._fetchall("SELECT * FROM mining_runs WHERE status = 'interrupted' ORDER BY started_at")
 
     # -- run documents --
@@ -645,7 +654,7 @@ class MiningRuntimeDB(_DB):
                    (id, run_id, document_key, raw_content_hash, normalized_content_hash,
                     action, status, document_id, document_snapshot_id, error_message,
                     started_at, finished_at, metadata_json)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
             (
                 data.id, data.run_id, data.document_key, data.raw_content_hash,
                 data.normalized_content_hash, data.action, data.status,
@@ -668,37 +677,37 @@ class MiningRuntimeDB(_DB):
         parts: list[str] = []
         params: list[Any] = []
         if status is not None:
-            parts.append("status = ?")
+            parts.append("status = %s")
             params.append(status)
         if document_id is not None:
-            parts.append("document_id = ?")
+            parts.append("document_id = %s")
             params.append(document_id)
         if document_snapshot_id is not None:
-            parts.append("document_snapshot_id = ?")
+            parts.append("document_snapshot_id = %s")
             params.append(document_snapshot_id)
         if error_message is not None:
-            parts.append("error_message = ?")
+            parts.append("error_message = %s")
             params.append(error_message)
         if finished_at is not None:
-            parts.append("finished_at = ?")
+            parts.append("finished_at = %s")
             params.append(finished_at)
         if metadata_json is not None:
-            parts.append("metadata_json = ?")
+            parts.append("metadata_json = %s")
             params.append(_json_dumps(metadata_json))
         if not parts:
             return
         params.append(rd_id)
-        self._execute(f"UPDATE mining_run_documents SET {', '.join(parts)} WHERE id = ?", tuple(params))
+        self._execute(f"UPDATE mining_run_documents SET {', '.join(parts)} WHERE id = %s", tuple(params))
 
-    def get_run_documents(self, run_id: str) -> list[sqlite3.Row]:
+    def get_run_documents(self, run_id: str) -> list[dict[str, Any]]:
         return self._fetchall(
-            "SELECT * FROM mining_run_documents WHERE run_id = ? ORDER BY id",
+            "SELECT * FROM mining_run_documents WHERE run_id = %s ORDER BY id",
             (run_id,),
         )
 
-    def get_run_document_by_key(self, run_id: str, document_key: str) -> sqlite3.Row | None:
+    def get_run_document_by_key(self, run_id: str, document_key: str) -> dict[str, Any] | None:
         return self._fetchone(
-            "SELECT * FROM mining_run_documents WHERE run_id = ? AND document_key = ?",
+            "SELECT * FROM mining_run_documents WHERE run_id = %s AND document_key = %s",
             (run_id, document_key),
         )
 
@@ -709,7 +718,7 @@ class MiningRuntimeDB(_DB):
             """INSERT INTO mining_run_stage_events
                    (id, run_id, run_document_id, stage, status, duration_ms,
                     output_summary, error_message, created_at, metadata_json)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
             (
                 data.id, data.run_id, data.run_document_id, data.stage, data.status,
                 data.duration_ms, data.output_summary, data.error_message,
@@ -718,38 +727,36 @@ class MiningRuntimeDB(_DB):
         )
         return data.id
 
-    def get_stage_events(self, run_id: str, run_document_id: str | None = None) -> list[sqlite3.Row]:
+    def get_stage_events(self, run_id: str, run_document_id: str | None = None) -> list[dict[str, Any]]:
         if run_document_id:
             return self._fetchall(
-                "SELECT * FROM mining_run_stage_events WHERE run_id = ? AND run_document_id = ? ORDER BY created_at",
+                "SELECT * FROM mining_run_stage_events WHERE run_id = %s AND run_document_id = %s ORDER BY created_at",
                 (run_id, run_document_id),
             )
         return self._fetchall(
-            "SELECT * FROM mining_run_stage_events WHERE run_id = ? ORDER BY created_at",
+            "SELECT * FROM mining_run_stage_events WHERE run_id = %s ORDER BY created_at",
             (run_id,),
         )
 
     def get_last_stage_status(self, run_id: str, run_document_id: str | None, stage: str) -> str | None:
-        """Return the status of the most recent event for a stage, or None if never started."""
         row = self._fetchone(
             """SELECT status FROM mining_run_stage_events
-               WHERE run_id = ? AND stage = ? AND (run_document_id = ? OR (? IS NULL AND run_document_id IS NULL))
+               WHERE run_id = %s AND stage = %s AND (run_document_id = %s OR (%s IS NULL AND run_document_id IS NULL))
                ORDER BY created_at DESC LIMIT 1""",
             (run_id, stage, run_document_id, run_document_id),
         )
         return row["status"] if row else None
 
     def get_committed_document_keys(self, run_id: str) -> frozenset[str]:
-        """Return document_keys that are committed in this run (for resume skip list)."""
         rows = self._fetchall(
-            "SELECT document_key FROM mining_run_documents WHERE run_id = ? AND status = 'committed'",
+            "SELECT document_key FROM mining_run_documents WHERE run_id = %s AND status = 'committed'",
             (run_id,),
         )
         return frozenset(r["document_key"] for r in rows)
 
     def get_failed_document_keys(self, run_id: str) -> frozenset[str]:
         rows = self._fetchall(
-            "SELECT document_key FROM mining_run_documents WHERE run_id = ? AND status IN ('failed', 'processing')",
+            "SELECT document_key FROM mining_run_documents WHERE run_id = %s AND status IN ('failed', 'processing')",
             (run_id,),
         )
         return frozenset(r["document_key"] for r in rows)
