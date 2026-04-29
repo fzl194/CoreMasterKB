@@ -32,7 +32,7 @@ from agent_serving.serving.retrieval.graph_expander import GraphExpander
 from agent_serving.serving.application.assembler import ContextAssembler
 from agent_serving.serving.application.query_understanding import QueryUnderstandingEngine
 from agent_serving.serving.application.retrieval_router import RetrievalRouter
-from agent_serving.serving.pipeline.retriever_manager import RetrieverManager
+from agent_serving.serving.pipeline.retrieval_orchestrator import RetrievalOrchestrator
 from agent_serving.serving.pipeline.fusion import (
     IdentityFusion,
     RRFFusion,
@@ -52,13 +52,12 @@ def _get_repo(request: Request) -> AssetRepository:
     return AssetRepository(request.app.state.db)
 
 
-def _get_retriever_manager(request: Request) -> RetrieverManager:
+def _get_orchestrator(request: Request) -> RetrievalOrchestrator:
     db = request.app.state.db
     bm25 = FTS5BM25Retriever(db)
     entity = EntityExactRetriever(db)
     dense = DenseVectorRetriever(db)
-    return RetrieverManager({
-        "fts_bm25": bm25,
+    return RetrievalOrchestrator({
         "lexical_bm25": bm25,
         "entity_exact": entity,
         "dense_vector": dense,
@@ -134,7 +133,7 @@ async def search(
     body: SearchRequest,
     request: Request,
     repo: AssetRepository = Depends(_get_repo),
-    retriever_mgr: RetrieverManager = Depends(_get_retriever_manager),
+    orchestrator: RetrievalOrchestrator = Depends(_get_orchestrator),
     expander: GraphExpander = Depends(_get_expander),
     qu_engine: QueryUnderstandingEngine = Depends(_get_qu_engine),
     route_router: RetrievalRouter = Depends(_get_router),
@@ -195,10 +194,12 @@ async def search(
 
     # 6. Retrieve from all configured routes
     trace.start_stage("retrieve")
-    raw_candidates = await retriever_mgr.retrieve_from_route_plan(
-        route_plan, scope.snapshot_ids,
+    orch_result = await orchestrator.execute(
+        understanding, route_plan,
         query_embedding=query_embedding,
+        snapshot_ids=scope.snapshot_ids,
     )
+    raw_candidates = orch_result.candidates
     trace.end_stage("retrieve", output_summary=f"candidates={len(raw_candidates)}")
 
     # 7. Fuse
@@ -260,6 +261,7 @@ async def search(
                 "candidate_count": len(ranked),
                 "fusion_method": fusion_method,
                 "query_embedding_dim": len(query_embedding) if query_embedding else 0,
+                "route_traces": [{"name": t.name, "attempted": t.attempted, "candidates": t.candidate_count, "skipped_reason": t.skipped_reason} for t in orch_result.route_traces],
             },
         })
 
