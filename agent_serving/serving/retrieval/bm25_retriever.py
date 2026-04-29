@@ -5,6 +5,7 @@ by the Reranker stage, not the retriever.
 """
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
@@ -51,8 +52,8 @@ class FTS5BM25Retriever(Retriever):
 
         placeholders = ",".join("%s" for _ in snapshot_ids)
 
-        # Scope/filter pushdown from query.scope
-        scope_filter = self._build_scope_filter(query.scope)
+        # Scope/filter pushdown from query.scope (parameterized to prevent SQL injection)
+        scope_filter, scope_params = self._build_scope_filter(query.scope)
 
         # Primary: tsvector full-text search with ts_rank_cd scoring
         sql = f"""
@@ -77,7 +78,7 @@ class FTS5BM25Retriever(Retriever):
             ORDER BY fts_score DESC
             LIMIT %s
         """
-        params: list[Any] = [query_text, query_text, *snapshot_ids, recall_limit]
+        params: list[Any] = [query_text, query_text, *snapshot_ids, *scope_params, recall_limit]
 
         try:
             async with self._pool.connection() as conn:
@@ -112,6 +113,8 @@ class FTS5BM25Retriever(Retriever):
         placeholders = ",".join("%s" for _ in snapshot_ids)
         recall_limit = top_k * 5
 
+        scope_filter, scope_params = self._build_scope_filter(query.scope)
+
         sql = f"""
             SELECT
                 ru.id,
@@ -130,10 +133,11 @@ class FTS5BM25Retriever(Retriever):
             FROM asset_retrieval_units ru
             WHERE ru.text %% %s
               AND ru.document_snapshot_id IN ({placeholders})
+              {scope_filter}
             ORDER BY sim_score DESC
             LIMIT %s
         """
-        params: list[Any] = [query_text, query_text, *snapshot_ids, recall_limit]
+        params: list[Any] = [query_text, query_text, *snapshot_ids, *scope_params, recall_limit]
 
         try:
             async with self._pool.connection() as conn:
@@ -175,6 +179,8 @@ class FTS5BM25Retriever(Retriever):
 
         recall_limit = top_k * 5
 
+        scope_filter, scope_params = self._build_scope_filter(query.scope)
+
         sql = f"""
             SELECT
                 ru.id,
@@ -192,8 +198,10 @@ class FTS5BM25Retriever(Retriever):
             FROM asset_retrieval_units ru
             WHERE ({like_clauses})
               AND ru.document_snapshot_id IN ({placeholders})
+              {scope_filter}
             LIMIT %s
         """
+        params.extend(scope_params)
         params.append(recall_limit)
 
         async with self._pool.connection() as conn:
@@ -225,17 +233,22 @@ class FTS5BM25Retriever(Retriever):
         return candidates
 
     @staticmethod
-    def _build_scope_filter(scope: dict) -> str:
-        """Build SQL filter from query scope for facets_json pushdown."""
+    def _build_scope_filter(scope: dict) -> tuple[str, list[str]]:
+        """Build SQL filter from query scope for facets_json pushdown.
+
+        Returns (sql_fragment, params) using parameterized JSONB to prevent injection.
+        """
         if not scope:
-            return ""
-        conditions = []
+            return "", []
+        conditions: list[str] = []
+        params: list[str] = []
         for key, values in scope.items():
             if isinstance(values, list) and values:
-                conditions.append(
-                    f"ru.facets_json @> '{{\"{key}\": {values!r}}}'::jsonb"
-                )
-        return " AND " + " AND ".join(conditions) if conditions else ""
+                conditions.append("ru.facets_json @> %s::jsonb")
+                params.append(json.dumps({key: values}))
+        if not conditions:
+            return "", []
+        return " AND " + " AND ".join(conditions), params
 
     def _row_to_candidate(
         self,

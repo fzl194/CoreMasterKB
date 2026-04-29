@@ -63,3 +63,21 @@ class TestEntityExactRetriever:
         rq = RetrievalQuery(original_query="SMF", keywords=["SMF"])
         results = await retriever.retrieve(rq, [])
         assert len(results) == 0
+
+    @pytest.mark.asyncio
+    async def test_scope_pushdown_filters(self, retriever):
+        """Scope pushdown should restrict results to matching facets."""
+        from agent_serving.tests.conftest import SNAP_UDG, SNAP_FEATURE
+        rq_no_scope = RetrievalQuery(
+            original_query="SMF",
+            entities=[EntityRef(type="network_element", name="SMF")],
+        )
+        rq_scope = RetrievalQuery(
+            original_query="SMF",
+            entities=[EntityRef(type="network_element", name="SMF")],
+            scope={"domains": ["5G"]},
+        )
+        results_all = await retriever.retrieve(rq_no_scope, [SNAP_FEATURE, SNAP_UDG])
+        results_scoped = await retriever.retrieve(rq_scope, [SNAP_FEATURE, SNAP_UDG])
+        # Scoped results should be subset of unscoped
+        assert len(results_scoped) <= len(results_all)

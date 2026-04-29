@@ -415,12 +415,17 @@ class ContextAssembler:
         if not snapshot_items:
             return []
 
-        relation_id_set = {r.id for r in relations}
         groups = []
         for snap_id, item_ids in snapshot_items.items():
+            # Only include relations connected to this group's items
+            item_id_set = set(item_ids)
+            group_rel_ids = [
+                r.id for r in relations
+                if r.from_id in item_id_set or r.to_id in item_id_set
+            ]
             groups.append(EvidenceGroup(
                 document_snapshot_id=snap_id,
                 item_ids=item_ids,
-                relation_ids=[rid for rid in relation_id_set],
+                relation_ids=group_rel_ids,
             ))
         return groups

@@ -68,12 +68,12 @@ class EntityExactRetriever(Retriever):
 
         placeholders = ",".join("%s" for _ in snapshot_ids)
         seen_ids: set[str] = set()
-        scope_filter = self._build_scope_filter(scope)
+        scope_filter, scope_params = self._build_scope_filter(scope)
 
         for name in entity_names:
             # Strategy 1: entity_card units with exact name match
             card_candidates = await self._match_entity_cards(
-                name, snapshot_ids, placeholders, scope_filter,
+                name, snapshot_ids, placeholders, scope_filter, scope_params,
             )
             for c in card_candidates:
                 if c.retrieval_unit_id not in seen_ids:
@@ -82,7 +82,7 @@ class EntityExactRetriever(Retriever):
 
             # Strategy 2: entity_refs_json LIKE → JSON parse
             ref_candidates = await self._match_entity_refs(
-                name, snapshot_ids, placeholders, scope_filter,
+                name, snapshot_ids, placeholders, scope_filter, scope_params,
             )
             for c in ref_candidates:
                 if c.retrieval_unit_id not in seen_ids:
@@ -91,7 +91,7 @@ class EntityExactRetriever(Retriever):
 
             # Strategy 3: generated_question containing entity name
             q_candidates = await self._match_generated_questions(
-                name, snapshot_ids, placeholders, scope_filter,
+                name, snapshot_ids, placeholders, scope_filter, scope_params,
             )
             for c in q_candidates:
                 if c.retrieval_unit_id not in seen_ids:
@@ -106,6 +106,7 @@ class EntityExactRetriever(Retriever):
         snapshot_ids: list[str],
         placeholders: str,
         scope_filter: str = "",
+        scope_params: list[str] | None = None,
     ) -> list[RetrievalCandidate]:
         """Strategy 1: match entity_card units by text."""
         sql = f"""
@@ -118,7 +119,7 @@ class EntityExactRetriever(Retriever):
               AND document_snapshot_id IN ({placeholders})
               {scope_filter}
         """
-        params: list[Any] = [f"%{entity_name}%", *snapshot_ids]
+        params: list[Any] = [f"%{entity_name}%", *snapshot_ids, *(scope_params or [])]
         async with self._pool.connection() as conn:
             cursor = await conn.execute(sql, params)
             rows = await cursor.fetchall()
@@ -130,6 +131,7 @@ class EntityExactRetriever(Retriever):
         snapshot_ids: list[str],
         placeholders: str,
         scope_filter: str = "",
+        scope_params: list[str] | None = None,
     ) -> list[RetrievalCandidate]:
         """Strategy 2: match entity_refs_json via LIKE + JSON parse."""
         sql = f"""
@@ -142,7 +144,7 @@ class EntityExactRetriever(Retriever):
               AND document_snapshot_id IN ({placeholders})
               {scope_filter}
         """
-        params: list[Any] = [f"%{entity_name}%", *snapshot_ids]
+        params: list[Any] = [f"%{entity_name}%", *snapshot_ids, *(scope_params or [])]
         async with self._pool.connection() as conn:
             cursor = await conn.execute(sql, params)
             rows = await cursor.fetchall()
@@ -163,6 +165,7 @@ class EntityExactRetriever(Retriever):
         snapshot_ids: list[str],
         placeholders: str,
         scope_filter: str = "",
+        scope_params: list[str] | None = None,
     ) -> list[RetrievalCandidate]:
         """Strategy 3: match generated_question units."""
         sql = f"""
@@ -175,7 +178,7 @@ class EntityExactRetriever(Retriever):
               AND document_snapshot_id IN ({placeholders})
               {scope_filter}
         """
-        params: list[Any] = [f"%{entity_name}%", *snapshot_ids]
+        params: list[Any] = [f"%{entity_name}%", *snapshot_ids, *(scope_params or [])]
         async with self._pool.connection() as conn:
             cursor = await conn.execute(sql, params)
             rows = await cursor.fetchall()
@@ -253,14 +256,19 @@ class EntityExactRetriever(Retriever):
         )
 
     @staticmethod
-    def _build_scope_filter(scope: dict | None) -> str:
-        """Build SQL filter from query scope for facets_json pushdown."""
+    def _build_scope_filter(scope: dict | None) -> tuple[str, list[str]]:
+        """Build SQL filter from query scope for facets_json pushdown.
+
+        Returns (sql_fragment, params) using parameterized JSONB to prevent injection.
+        """
         if not scope:
-            return ""
-        conditions = []
+            return "", []
+        conditions: list[str] = []
+        params: list[str] = []
         for key, values in scope.items():
             if isinstance(values, list) and values:
-                conditions.append(
-                    f"facets_json @> '{{\"{key}\": {values!r}}}'::jsonb"
-                )
-        return " AND " + " AND ".join(conditions) if conditions else ""
+                conditions.append("facets_json @> %s::jsonb")
+                params.append(json.dumps({key: values}))
+        if not conditions:
+            return "", []
+        return " AND " + " AND ".join(conditions), params

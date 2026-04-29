@@ -6,6 +6,7 @@ No numpy dependency; no client-side caching needed — PG handles it.
 """
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
@@ -49,8 +50,8 @@ class DenseVectorRetriever(Retriever):
         placeholders = ",".join("%s" for _ in snapshot_ids)
         vec_literal = "[" + ",".join(str(v) for v in query.query_embedding) + "]"
 
-        # Scope/filter pushdown
-        scope_filter = self._build_scope_filter(query.scope)
+        # Scope/filter pushdown (parameterized to prevent SQL injection)
+        scope_filter, scope_params = self._build_scope_filter(query.scope)
 
         sql = f"""
             SELECT
@@ -76,7 +77,7 @@ class DenseVectorRetriever(Retriever):
             ORDER BY distance ASC
             LIMIT %s
         """
-        params: list[Any] = [vec_literal, *snapshot_ids, top_k]
+        params: list[Any] = [vec_literal, *snapshot_ids, *scope_params, top_k]
 
         try:
             async with self._pool.connection() as conn:
@@ -116,14 +117,19 @@ class DenseVectorRetriever(Retriever):
         return candidates
 
     @staticmethod
-    def _build_scope_filter(scope: dict) -> str:
-        """Build SQL filter from query scope for facets_json pushdown."""
+    def _build_scope_filter(scope: dict) -> tuple[str, list[str]]:
+        """Build SQL filter from query scope for facets_json pushdown.
+
+        Returns (sql_fragment, params) using parameterized JSONB to prevent injection.
+        """
         if not scope:
-            return ""
-        conditions = []
+            return "", []
+        conditions: list[str] = []
+        params: list[str] = []
         for key, values in scope.items():
             if isinstance(values, list) and values:
-                conditions.append(
-                    f"ru.facets_json @> '{{\"{key}\": {values!r}}}'::jsonb"
-                )
-        return " AND " + " AND ".join(conditions) if conditions else ""
+                conditions.append("ru.facets_json @> %s::jsonb")
+                params.append(json.dumps({key: values}))
+        if not conditions:
+            return "", []
+        return " AND " + " AND ".join(conditions), params

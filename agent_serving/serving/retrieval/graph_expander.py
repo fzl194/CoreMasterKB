@@ -149,12 +149,10 @@ class GraphExpander:
 
         placeholders = ",".join("%s" for _ in segment_ids)
         type_filter = ""
-        params: list[str] = list(segment_ids)
 
         if relation_types:
             type_placeholders = ",".join("%s" for _ in relation_types)
             type_filter = f" AND rel.relation_type IN ({type_placeholders})"
-            params.extend(relation_types)
 
         # When snapshot_ids provided, join raw_segments to filter by snapshot
         snapshot_join = ""
@@ -169,15 +167,23 @@ class GraphExpander:
                 f" AND rs_src.document_snapshot_id IN ({snap_ph})"
                 f" AND rs_tgt.document_snapshot_id IN ({snap_ph})"
             )
-            # Build second SELECT's params separately
-            params2: list[str] = list(segment_ids)
-            if relation_types:
-                params2.extend(relation_types)
-            params.extend(snapshot_ids)
-            params.extend(snapshot_ids)
-            params2.extend(snapshot_ids)
-            params2.extend(snapshot_ids)
-            params.extend(params2)
+
+        # Build params for UNION ALL: first SELECT + second SELECT
+        p1: list[str] = list(segment_ids)
+        if relation_types:
+            p1.extend(relation_types)
+        if snapshot_ids:
+            p1.extend(snapshot_ids)
+            p1.extend(snapshot_ids)
+
+        p2: list[str] = list(segment_ids)
+        if relation_types:
+            p2.extend(relation_types)
+        if snapshot_ids:
+            p2.extend(snapshot_ids)
+            p2.extend(snapshot_ids)
+
+        params = p1 + p2
 
         sql = f"""
             SELECT
