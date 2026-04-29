@@ -100,8 +100,8 @@ async def run_e2e():
     await llm_client.ensure_templates()
 
     # Embedding generator
-    from knowledge_mining.mining.infra.embedding import ZhipuEmbeddingGenerator
-    embedding_gen = ZhipuEmbeddingGenerator(
+    from agent_serving.serving.infrastructure.embedding import EmbeddingGenerator
+    embedding_gen = EmbeddingGenerator(
         api_key=os.environ.get("EMBEDDING_API_KEY", ""),
         model=os.environ.get("EMBEDDING_MODEL", "embedding-3"),
         base_url=os.environ.get("EMBEDDING_BASE_URL", "https://open.bigmodel.cn/api/paas/v4"),

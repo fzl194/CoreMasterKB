@@ -65,8 +65,8 @@ async def lifespan(app: FastAPI):
     embedding_api_key = os.environ.get("EMBEDDING_API_KEY")
     if embedding_api_key:
         try:
-            from knowledge_mining.mining.embedding import ZhipuEmbeddingGenerator
-            app.state.embedding_generator = ZhipuEmbeddingGenerator(
+            from agent_serving.serving.infrastructure.embedding import EmbeddingGenerator
+            app.state.embedding_generator = EmbeddingGenerator(
                 api_key=embedding_api_key,
                 model=os.environ.get("EMBEDDING_MODEL", "embedding-3"),
                 base_url=os.environ.get("EMBEDDING_BASE_URL", "https://open.bigmodel.cn/api/paas/v4"),
@@ -80,7 +80,7 @@ async def lifespan(app: FastAPI):
 
     # Cleanup
     if app.state.llm_client:
-        app.state.llm_client.close()
+        await app.state.llm_client.close()
     await db.close()
 
 
