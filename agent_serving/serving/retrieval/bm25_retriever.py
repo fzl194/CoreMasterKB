@@ -8,8 +8,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-import psycopg
-from psycopg.rows import dict_row
+from psycopg_pool import AsyncConnectionPool
 
 from agent_serving.serving.schemas.constants import ROUTE_LEXICAL_BM25
 from agent_serving.serving.schemas.models import RetrievalCandidate, RetrievalQuery
@@ -25,8 +24,8 @@ class FTS5BM25Retriever(Retriever):
     and budget truncation are handled by the Reranker stage.
     """
 
-    def __init__(self, db: psycopg.AsyncConnection) -> None:
-        self._db = db
+    def __init__(self, pool: AsyncConnectionPool) -> None:
+        self._pool = pool
 
     async def retrieve(
         self,
@@ -52,6 +51,9 @@ class FTS5BM25Retriever(Retriever):
 
         placeholders = ",".join("%s" for _ in snapshot_ids)
 
+        # Scope/filter pushdown from query.scope
+        scope_filter = self._build_scope_filter(query.scope)
+
         # Primary: tsvector full-text search with ts_rank_cd scoring
         sql = f"""
             SELECT
@@ -71,14 +73,16 @@ class FTS5BM25Retriever(Retriever):
             FROM asset_retrieval_units ru
             WHERE ru.search_vector @@ plainto_tsquery('simple', %s)
               AND ru.document_snapshot_id IN ({placeholders})
+              {scope_filter}
             ORDER BY fts_score DESC
             LIMIT %s
         """
         params: list[Any] = [query_text, query_text, *snapshot_ids, recall_limit]
 
         try:
-            cursor = await self._db.execute(sql, params)
-            rows = await cursor.fetchall()
+            async with self._pool.connection() as conn:
+                cursor = await conn.execute(sql, params)
+                rows = await cursor.fetchall()
         except Exception:
             logger.warning("tsvector query failed, falling back to trigram similarity", exc_info=True)
             return await self._fallback_trigram(query, snapshot_ids, top_k)
@@ -132,8 +136,9 @@ class FTS5BM25Retriever(Retriever):
         params: list[Any] = [query_text, query_text, *snapshot_ids, recall_limit]
 
         try:
-            cursor = await self._db.execute(sql, params)
-            rows = await cursor.fetchall()
+            async with self._pool.connection() as conn:
+                cursor = await conn.execute(sql, params)
+                rows = await cursor.fetchall()
         except Exception:
             logger.warning("Trigram query also failed", exc_info=True)
             return await self._fallback_like(query, snapshot_ids, top_k)
@@ -191,8 +196,9 @@ class FTS5BM25Retriever(Retriever):
         """
         params.append(recall_limit)
 
-        cursor = await self._db.execute(sql, params)
-        rows = await cursor.fetchall()
+        async with self._pool.connection() as conn:
+            cursor = await conn.execute(sql, params)
+            rows = await cursor.fetchall()
 
         candidates = []
         for row in rows:
@@ -217,6 +223,19 @@ class FTS5BM25Retriever(Retriever):
             score = r.get("fts_score", 0.0) or 0.0
             candidates.append(self._row_to_candidate(r, score, source))
         return candidates
+
+    @staticmethod
+    def _build_scope_filter(scope: dict) -> str:
+        """Build SQL filter from query scope for facets_json pushdown."""
+        if not scope:
+            return ""
+        conditions = []
+        for key, values in scope.items():
+            if isinstance(values, list) and values:
+                conditions.append(
+                    f"ru.facets_json @> '{{\"{key}\": {values!r}}}'::jsonb"
+                )
+        return " AND " + " AND ".join(conditions) if conditions else ""
 
     def _row_to_candidate(
         self,

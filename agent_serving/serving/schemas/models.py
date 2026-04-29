@@ -173,11 +173,19 @@ class Issue(BaseModel):
     detail: dict = Field(default_factory=dict)
 
 
+class EvidenceGroup(BaseModel):
+    """Group of evidence items from the same document snapshot."""
+    document_snapshot_id: str
+    item_ids: list[str] = Field(default_factory=list)
+    relation_ids: list[str] = Field(default_factory=list)
+
+
 class ContextPack(BaseModel):
     query: ContextQuery
     items: list[ContextItem] = Field(default_factory=list)
     relations: list[ContextRelation] = Field(default_factory=list)
     sources: list[SourceRef] = Field(default_factory=list)
+    evidence_groups: list[EvidenceGroup] = Field(default_factory=list)
     issues: list[Issue] = Field(default_factory=list)
     suggestions: list[str] = Field(default_factory=list)
     debug: dict | None = None

@@ -67,6 +67,7 @@ class ServingDomainProfile:
     route_policy: dict[str, dict[str, dict[str, float]]] = field(default_factory=dict)
     extractor_rules: tuple[dict[str, Any], ...] = ()
     eval_questions: tuple[dict[str, Any], ...] = ()
+    query_understanding: dict[str, Any] = field(default_factory=dict)
 
 
 def load_serving_profile(
@@ -97,6 +98,7 @@ def load_serving_profile(
         route_policy=_parse_route_policy(data.get("serving", {})),
         extractor_rules=tuple(data.get("extractor_rules", [])),
         eval_questions=tuple(data.get("eval_questions", [])),
+        query_understanding=data.get("serving", {}).get("query_understanding", {}),
     )
 
 

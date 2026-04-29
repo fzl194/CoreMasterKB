@@ -1,6 +1,6 @@
 """FastAPI application with PostgreSQL backend.
 
-Reads PG connection from .env (PG_HOST, PG_PORT, etc.).
+Reads PG connection from .env (PG_HOST, PG_PORT, etc.) via ServingDbConfig.
 Uses psycopg async pool for all database operations.
 """
 from __future__ import annotations
@@ -10,46 +10,23 @@ import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
-from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
 
 from agent_serving.serving.api.health import router as health_router
 from agent_serving.serving.api.search import router as search_router
+from agent_serving.serving.infrastructure.pg_config import ServingDbConfig
 from agent_serving.serving.repositories.asset_repo import AssetRepository
 
 logger = logging.getLogger(__name__)
 
-_PG_ENV_VARS = ("PG_HOST", "PG_PORT", "PG_DBNAME", "PG_USER", "PG_PASSWORD")
-
-
-def _build_conninfo() -> str:
-    """Build psycopg conninfo from environment variables."""
-    host = os.environ.get("PG_HOST", "localhost")
-    port = os.environ.get("PG_PORT", "5432")
-    dbname = os.environ.get("PG_DBNAME", "coremasterkb")
-    user = os.environ.get("PG_USER", "kb_user")
-    password = os.environ.get("PG_PASSWORD", "")
-    sslmode = os.environ.get("PG_SSLMODE", "disable")
-    gssencmode = os.environ.get("PG_GSSENCMODE", "disable")
-    return (
-        f"host={host} port={port} dbname={dbname} user={user} "
-        f"password={password} sslmode={sslmode} gssencmode={gssencmode}"
-    )
-
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    conninfo = _build_conninfo()
-
-    pool = AsyncConnectionPool(
-        conninfo,
-        min_size=2,
-        max_size=10,
-        open=False,
-        kwargs={"row_factory": dict_row},
-    )
+    config = ServingDbConfig()
+    pool = config.create_pool()
     await pool.open()
-    app.state.pg_pool = pool
+    app.state.pool = pool
+    app.state.embedding_dimensions = config.embedding_dimensions
 
     # Cache domain profile if configured
     domain_id = os.environ.get("COREMASTERKB_DOMAIN")
@@ -58,7 +35,7 @@ async def lifespan(app: FastAPI):
             from agent_serving.serving.domain_pack_reader import load_serving_profile
             app.state.domain_profile = load_serving_profile(domain_id)
         except Exception:
-            pass
+            app.state.domain_profile = None
     else:
         app.state.domain_profile = None
 
@@ -97,13 +74,12 @@ async def lifespan(app: FastAPI):
 
 
 async def get_repo(request: Request) -> AssetRepository:
-    async with request.app.state.pg_pool.connection() as conn:
-        return AssetRepository(conn)
+    return AssetRepository(request.app.state.pool)
 
 
 app = FastAPI(
     title="Cloud Core Knowledge Backend",
-    version="0.3.0",
+    version="0.4.0",
     description="Agent Knowledge Backend for cloud core network — Retrieval Orchestrator (PostgreSQL).",
     lifespan=lifespan,
 )

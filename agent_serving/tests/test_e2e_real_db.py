@@ -1,26 +1,23 @@
-"""E2E real DB test — verify /api/v1/search returns non-empty items on real data.
+"""E2E real DB test — verify /api/v1/search returns non-empty items on real PG data.
 
-This test proves the main API chain works end-to-end with the real SQLite DB.
+This test proves the main API chain works end-to-end with PostgreSQL.
+Requires seeded PG (run `python -m agent_serving.scripts.seed_pg` first).
 External services (LLM, embedding, rerank) are disabled to verify BM25+entity baseline.
 """
 from __future__ import annotations
 
 import os
-from pathlib import Path
 
 import pytest
 import pytest_asyncio
-import aiosqlite
 from httpx import ASGITransport, AsyncClient
 
 from agent_serving.serving.main import app
 
-REAL_DB_PATH = Path(__file__).resolve().parents[2] / "data" / "kb-asset_core.sqlite"
-
-# Skip entire module if real DB doesn't exist
+# Skip if PG not configured
 pytestmark = pytest.mark.skipif(
-    not REAL_DB_PATH.exists(),
-    reason="Real DB (data/kb-asset_core.sqlite) not found — skipping E2E test",
+    not os.environ.get("PG_HOST"),
+    reason="PG_HOST not set — skipping E2E PG test",
 )
 
 BASIC_QUERIES = [
@@ -31,18 +28,10 @@ BASIC_QUERIES = [
 
 
 @pytest_asyncio.fixture
-async def real_client():
-    """Test client wired to the real DB, with external services disabled."""
-    # Close any existing DB from lifespan
-    lifespan_db = getattr(app.state, "db", None)
-    if lifespan_db:
-        await lifespan_db.close()
-
-    db = await aiosqlite.connect(str(REAL_DB_PATH))
-    db.row_factory = aiosqlite.Row
-    app.state.db = db
-
-    # Disable external services — test BM25+entity baseline only
+async def real_client(pg_pool):
+    """Test client wired to the test PG pool, with external services disabled."""
+    app.state.pool = pg_pool
+    app.state.embedding_dimensions = 1024
     app.state.llm_client = None
     app.state.embedding_generator = None
     app.state.domain_profile = None
@@ -51,11 +40,10 @@ async def real_client():
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac
 
-    await db.close()
 
-
+@pytest.mark.pg
 class TestE2ERealDB:
-    """E2E: real DB + real API endpoint -> non-empty items."""
+    """E2E: real PG + real API endpoint -> non-empty items."""
 
     @pytest.mark.asyncio
     async def test_basic_queries_return_items(self, real_client):
@@ -94,5 +82,4 @@ class TestE2ERealDB:
         assert resp.status_code == 200
         pack = resp.json()
         assert len(pack["items"]) > 0, "BM25+entity baseline returned 0 items"
-        # Verify the understanding used rule path (LLM disabled)
         assert pack["debug"]["understanding"]["source"] == "rule"

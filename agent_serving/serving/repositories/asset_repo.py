@@ -1,4 +1,4 @@
-"""Read-only repository for asset_core tables — PostgreSQL async backend.
+"""Read-only repository for asset_core tables — PostgreSQL async pool backend.
 
 Query path: active release → build → document snapshots → retrieval_units.
 source_refs_json is parsed for content-level drill-down, not passthrough.
@@ -6,12 +6,10 @@ Relations are fetched as first-class structures.
 """
 from __future__ import annotations
 
-import json
 import logging
 from typing import Any
 
-import psycopg
-from psycopg.rows import dict_row
+from psycopg_pool import AsyncConnectionPool
 
 from agent_serving.serving.schemas.models import ActiveScope, QueryPlan
 from agent_serving.serving.schemas.json_utils import parse_source_refs
@@ -22,8 +20,8 @@ logger = logging.getLogger(__name__)
 class AssetRepository:
     """Read-only repo over asset_core PostgreSQL tables."""
 
-    def __init__(self, db: psycopg.AsyncConnection) -> None:
-        self._db = db
+    def __init__(self, pool: AsyncConnectionPool) -> None:
+        self._pool = pool
 
     async def resolve_active_scope(self, channel: str = "default") -> ActiveScope:
         """Resolve active release → build → snapshots.
@@ -32,43 +30,44 @@ class AssetRepository:
         - 0 active releases (no data to serve)
         - >1 active releases (data integrity error)
         """
-        cursor = await self._db.execute(
-            "SELECT id FROM asset_publish_releases "
-            "WHERE status = 'active' AND channel = %s",
-            (channel,),
-        )
-        rows = await cursor.fetchall()
+        async with self._pool.connection() as conn:
+            cursor = await conn.execute(
+                "SELECT id FROM asset_publish_releases "
+                "WHERE status = 'active' AND channel = %s",
+                (channel,),
+            )
+            rows = await cursor.fetchall()
 
-        if len(rows) == 0:
-            raise ValueError("no_active_release")
-        if len(rows) > 1:
-            raise ValueError("multiple_active_releases")
+            if len(rows) == 0:
+                raise ValueError("no_active_release")
+            if len(rows) > 1:
+                raise ValueError("multiple_active_releases")
 
-        release_id = rows[0]["id"]
+            release_id = rows[0]["id"]
 
-        # Get build for this release
-        cursor = await self._db.execute(
-            "SELECT build_id FROM asset_publish_releases WHERE id = %s",
-            (release_id,),
-        )
-        release_row = await cursor.fetchone()
-        build_id = release_row["build_id"]
+            # Get build for this release
+            cursor = await conn.execute(
+                "SELECT build_id FROM asset_publish_releases WHERE id = %s",
+                (release_id,),
+            )
+            release_row = await cursor.fetchone()
+            build_id = release_row["build_id"]
 
-        # Get document snapshots for this build (only active selections)
-        cursor = await self._db.execute(
-            "SELECT document_snapshot_id, document_id "
-            "FROM asset_build_document_snapshots "
-            "WHERE build_id = %s AND selection_status = 'active'",
-            (build_id,),
-        )
-        snapshot_rows = await cursor.fetchall()
-        snapshot_ids = [r["document_snapshot_id"] for r in snapshot_rows]
+            # Get document snapshots for this build (only active selections)
+            cursor = await conn.execute(
+                "SELECT document_snapshot_id, document_id "
+                "FROM asset_build_document_snapshots "
+                "WHERE build_id = %s AND selection_status = 'active'",
+                (build_id,),
+            )
+            snapshot_rows = await cursor.fetchall()
+            snapshot_ids = [r["document_snapshot_id"] for r in snapshot_rows]
 
-        # Build document_snapshot_map: document_id → snapshot_id (active only)
-        document_snapshot_map = {
-            r["document_id"]: r["document_snapshot_id"]
-            for r in snapshot_rows
-        }
+            # Build document_snapshot_map: document_id → snapshot_id (active only)
+            document_snapshot_map = {
+                r["document_id"]: r["document_snapshot_id"]
+                for r in snapshot_rows
+            }
 
         return ActiveScope(
             release_id=release_id,
@@ -116,8 +115,9 @@ class AssetRepository:
             WHERE rs.id IN ({placeholders})
             {snapshot_filter}
         """
-        cursor = await self._db.execute(sql, params)
-        return [dict(row) for row in await cursor.fetchall()]
+        async with self._pool.connection() as conn:
+            cursor = await conn.execute(sql, params)
+            return [dict(row) for row in await cursor.fetchall()]
 
     async def resolve_source_segments(
         self,
@@ -159,8 +159,9 @@ class AssetRepository:
             WHERE rs.id IN ({placeholders})
             {snapshot_filter}
         """
-        cursor = await self._db.execute(sql, params)
-        return [dict(row) for row in await cursor.fetchall()]
+        async with self._pool.connection() as conn:
+            cursor = await conn.execute(sql, params)
+            return [dict(row) for row in await cursor.fetchall()]
 
     async def get_relations_for_segments(
         self,
@@ -191,8 +192,9 @@ class AssetRepository:
                OR rel.target_segment_id IN ({placeholders})
             {type_filter}
         """
-        cursor = await self._db.execute(sql, params)
-        return [dict(row) for row in await cursor.fetchall()]
+        async with self._pool.connection() as conn:
+            cursor = await conn.execute(sql, params)
+            return [dict(row) for row in await cursor.fetchall()]
 
     async def get_document_sources(
         self,
@@ -225,5 +227,6 @@ class AssetRepository:
             WHERE d.id IN ({placeholders})
             {snapshot_filter}
         """
-        cursor = await self._db.execute(sql, params)
-        return [dict(row) for row in await cursor.fetchall()]
+        async with self._pool.connection() as conn:
+            cursor = await conn.execute(sql, params)
+            return [dict(row) for row in await cursor.fetchall()]

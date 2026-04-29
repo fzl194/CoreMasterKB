@@ -17,13 +17,13 @@ from agent_serving.tests.conftest import SEED_IDS
 
 
 @pytest_asyncio.fixture
-async def repo(db_connection):
-    return AssetRepository(db_connection)
+async def repo(pg_pool):
+    return AssetRepository(pg_pool)
 
 
 @pytest_asyncio.fixture
-async def graph(db_connection):
-    return GraphExpander(db_connection)
+async def graph(pg_pool):
+    return GraphExpander(pg_pool)
 
 
 @pytest_asyncio.fixture
@@ -77,6 +77,7 @@ def _make_normalized(**overrides):
     return NormalizedQuery(**defaults)
 
 
+@pytest.mark.pg
 class TestBasicAssembly:
     @pytest.mark.asyncio
     async def test_assemble_with_seed_items(self, assembler, scope, seed_ids):
@@ -135,6 +136,7 @@ class TestBasicAssembly:
         assert any("UDG" in k for k in source_keys)
 
 
+@pytest.mark.pg
 class TestSourceDrillDown:
     @pytest.mark.asyncio
     async def test_source_refs_parsed(self, assembler, scope, seed_ids):
@@ -207,6 +209,7 @@ class TestSourceDrillDown:
         assert len(context_items) == 0
 
 
+@pytest.mark.pg
 class TestGraphExpansion:
     @pytest.mark.asyncio
     async def test_relations_in_output(self, assembler, scope, seed_ids):

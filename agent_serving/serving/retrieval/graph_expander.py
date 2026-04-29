@@ -5,11 +5,10 @@ Returns expanded segments with distance and relation type metadata.
 """
 from __future__ import annotations
 
-import json
 import logging
 from typing import Any
 
-import psycopg
+from psycopg_pool import AsyncConnectionPool
 
 from agent_serving.serving.schemas.json_utils import (
     parse_source_refs,
@@ -22,8 +21,8 @@ logger = logging.getLogger(__name__)
 class GraphExpander:
     """BFS graph expander for raw segment relations."""
 
-    def __init__(self, db: psycopg.AsyncConnection) -> None:
-        self._db = db
+    def __init__(self, pool: AsyncConnectionPool) -> None:
+        self._pool = pool
 
     async def expand(
         self,
@@ -87,10 +86,7 @@ class GraphExpander:
         expansions: list[dict[str, Any]],
         snapshot_ids: list[str] | None = None,
     ) -> list[dict[str, Any]]:
-        """Fetch full segment data for expanded segment IDs.
-
-        v1.2: snapshot_ids constrains results to active build snapshots.
-        """
+        """Fetch full segment data for expanded segment IDs."""
         if not expansions:
             return []
 
@@ -126,8 +122,9 @@ class GraphExpander:
             WHERE rs.id IN ({placeholders})
             {snapshot_filter}
         """
-        cursor = await self._db.execute(sql, params)
-        rows = await cursor.fetchall()
+        async with self._pool.connection() as conn:
+            cursor = await conn.execute(sql, params)
+            rows = await cursor.fetchall()
 
         results = []
         for row in rows:
@@ -146,11 +143,7 @@ class GraphExpander:
         relation_types: list[str] | None = None,
         snapshot_ids: list[str] | None = None,
     ) -> list[dict[str, Any]]:
-        """Get neighboring segments via relations table.
-
-        When snapshot_ids is provided, only returns neighbors
-        that belong to the active build's snapshots.
-        """
+        """Get neighboring segments via relations table."""
         if not segment_ids:
             return []
 
@@ -176,17 +169,14 @@ class GraphExpander:
                 f" AND rs_src.document_snapshot_id IN ({snap_ph})"
                 f" AND rs_tgt.document_snapshot_id IN ({snap_ph})"
             )
-            # First SELECT: segment_ids + type + 2×snapshot
-            # Second SELECT: segment_ids + type + 2×snapshot
-            # Total: extend params for second SELECT's params
+            # Build second SELECT's params separately
             params2: list[str] = list(segment_ids)
             if relation_types:
                 params2.extend(relation_types)
-            if snapshot_ids:
-                params.extend(snapshot_ids)
-                params.extend(snapshot_ids)
-                params2.extend(snapshot_ids)
-                params2.extend(snapshot_ids)
+            params.extend(snapshot_ids)
+            params.extend(snapshot_ids)
+            params2.extend(snapshot_ids)
+            params2.extend(snapshot_ids)
             params.extend(params2)
 
         sql = f"""
@@ -210,5 +200,6 @@ class GraphExpander:
             {type_filter}
             {snapshot_filter}
         """
-        cursor = await self._db.execute(sql, params)
-        return [dict(row) for row in await cursor.fetchall()]
+        async with self._pool.connection() as conn:
+            cursor = await conn.execute(sql, params)
+            return [dict(row) for row in await cursor.fetchall()]

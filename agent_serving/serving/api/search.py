@@ -49,14 +49,15 @@ router = APIRouter(prefix="/api/v1", tags=["search"])
 
 
 def _get_repo(request: Request) -> AssetRepository:
-    return AssetRepository(request.app.state.db)
+    return AssetRepository(request.app.state.pool)
 
 
 def _get_orchestrator(request: Request) -> RetrievalOrchestrator:
-    db = request.app.state.db
-    bm25 = FTS5BM25Retriever(db)
-    entity = EntityExactRetriever(db)
-    dense = DenseVectorRetriever(db)
+    pool = request.app.state.pool
+    embedding_dimensions = getattr(request.app.state, "embedding_dimensions", 1024)
+    bm25 = FTS5BM25Retriever(pool)
+    entity = EntityExactRetriever(pool)
+    dense = DenseVectorRetriever(pool, embedding_dimensions=embedding_dimensions)
     return RetrievalOrchestrator({
         "lexical_bm25": bm25,
         "entity_exact": entity,
@@ -65,7 +66,7 @@ def _get_orchestrator(request: Request) -> RetrievalOrchestrator:
 
 
 def _get_expander(request: Request) -> GraphExpander:
-    return GraphExpander(request.app.state.db)
+    return GraphExpander(request.app.state.pool)
 
 
 def _get_qu_engine(request: Request) -> QueryUnderstandingEngine:

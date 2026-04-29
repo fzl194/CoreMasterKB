@@ -410,33 +410,6 @@ class TestV12SourceSegmentIdBridge:
         assert result == []
 
 
-class TestV12FTSORQuery:
-    """Step 1.3: FTS5 OR query builder."""
-
-    def test_or_query_building(self):
-        from agent_serving.serving.retrieval.bm25_retriever import _build_fts_or_query
-        result = _build_fts_or_query(["5G", "eMBB", "概念"])
-        assert "OR" in result
-        assert '"5G"' in result
-        assert '"eMBB"' in result
-        assert '"概念"' in result
-
-    def test_or_query_empty_tokens(self):
-        from agent_serving.serving.retrieval.bm25_retriever import _build_fts_or_query
-        result = _build_fts_or_query([])
-        assert result == ""
-
-    def test_or_query_single_token(self):
-        from agent_serving.serving.retrieval.bm25_retriever import _build_fts_or_query
-        result = _build_fts_or_query(["5G"])
-        assert result == '"5G"'
-
-    def test_or_query_escapes_quotes(self):
-        from agent_serving.serving.retrieval.bm25_retriever import _build_fts_or_query
-        result = _build_fts_or_query(['test"value'])
-        assert '""' in result
-
-
 class TestV12LLMNormalizerFallback:
     """Step 3.2: LLM normalizer fallback to rule-based."""
 
