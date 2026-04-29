@@ -13,9 +13,9 @@ import logging
 from dataclasses import dataclass, field
 from queue import Queue
 from threading import Thread
-from typing import Any, Callable, Protocol, runtime_checkable
+from typing import Any, Callable
 
-from knowledge_mining.mining.models import (
+from knowledge_mining.mining.contracts.models import (
     DocumentProfile,
     RawFileData,
     RawSegmentData,
@@ -23,6 +23,7 @@ from knowledge_mining.mining.models import (
     SectionNode,
     SegmentRelationData,
 )
+from knowledge_mining.mining.contracts.protocols import Segmenter, RelationBuilder
 
 logger = logging.getLogger(__name__)
 
@@ -63,24 +64,6 @@ class DocumentContext:
 # ---------------------------------------------------------------------------
 # Operator Protocols
 # ---------------------------------------------------------------------------
-
-@runtime_checkable
-class Segmenter(Protocol):
-    """Protocol for splitting a SectionNode tree into segments."""
-
-    def segment(
-        self, tree: SectionNode, profile: DocumentProfile, **kwargs: Any,
-    ) -> list[RawSegmentData]: ...
-
-
-@runtime_checkable
-class RelationBuilder(Protocol):
-    """Protocol for building segment relations."""
-
-    def build(
-        self, segments: list[RawSegmentData], **kwargs: Any,
-    ) -> tuple[list[SegmentRelationData], dict[str, str]]: ...
-
 
 # ---------------------------------------------------------------------------
 # Pipeline configuration
@@ -195,7 +178,7 @@ class MiningPipeline:
         if stage_callback:
             stage_callback("build_retrieval_units", ctx)
         if ctx.segments:
-            from knowledge_mining.mining.retrieval_units import build_retrieval_units
+            from knowledge_mining.mining.stages.retrieval_units import build_retrieval_units
             units = build_retrieval_units(
                 list(ctx.segments),
                 seg_ids=ctx.seg_ids,
@@ -341,7 +324,7 @@ def retrieval_units_stage(ctx: DocumentContext, cfg: PipelineConfig) -> Document
     """Stage 5: Build retrieval units."""
     if not ctx.segments:
         return ctx
-    from knowledge_mining.mining.retrieval_units import build_retrieval_units
+    from knowledge_mining.mining.stages.retrieval_units import build_retrieval_units
     profile = ctx.profile
     units = build_retrieval_units(
         list(ctx.segments),

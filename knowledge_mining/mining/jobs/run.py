@@ -20,8 +20,8 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-from knowledge_mining.mining.db import AssetCoreDB, MiningRuntimeDB
-from knowledge_mining.mining.models import (
+from knowledge_mining.mining.infra.db import AssetCoreDB, MiningRuntimeDB
+from knowledge_mining.mining.contracts.models import (
     BatchParams,
     DocumentProfile,
     MiningRunData,
@@ -32,14 +32,14 @@ from knowledge_mining.mining.models import (
 )
 from knowledge_mining.mining.runtime import RuntimeTracker
 from knowledge_mining.mining.ingestion import ingest_directory
-from knowledge_mining.mining.parsers import create_parser
-from knowledge_mining.mining.segmentation import DefaultSegmenter
-from knowledge_mining.mining.enrich import RuleBasedEnricher
-from knowledge_mining.mining.relations import DefaultRelationBuilder
+from knowledge_mining.mining.stages.parse import create_parser
+from knowledge_mining.mining.stages.segment import DefaultSegmenter
+from knowledge_mining.mining.stages.enrich import RuleBasedEnricher
+from knowledge_mining.mining.stages.relations import DefaultRelationBuilder
 from knowledge_mining.mining.snapshot import select_or_create_snapshot
-from knowledge_mining.mining.publishing import assemble_build, classify_documents, publish_release
-from knowledge_mining.mining.extractors import RuleBasedEntityExtractor, DefaultRoleClassifier  # noqa: F401 — used for enrich
-from knowledge_mining.mining.domain_pack import DomainProfile, load_domain_pack
+from knowledge_mining.mining.stages.publishing import assemble_build, classify_documents, publish_release
+from knowledge_mining.mining.infra.extractors import RuleBasedEntityExtractor, DefaultRoleClassifier  # noqa: F401 — used for enrich
+from knowledge_mining.mining.infra.domain_pack import DomainProfile, load_domain_pack
 from knowledge_mining.mining.pipeline import (
     DocumentContext, PipelineConfig, MiningPipeline,
     StreamingPipeline,
@@ -187,9 +187,9 @@ def _init_llm(
     if not llm_base_url:
         return None
 
-    from knowledge_mining.mining.llm_client import LlmClient
-    from knowledge_mining.mining.llm_templates import build_templates_from_profile
-    from knowledge_mining.mining.retrieval_units import LlmQuestionGenerator
+    from knowledge_mining.mining.infra.llm_client import LlmClient
+    from knowledge_mining.mining.infra.llm_templates import build_templates_from_profile
+    from knowledge_mining.mining.stages.retrieval_units import LlmQuestionGenerator
 
     client = LlmClient(base_url=llm_base_url, bypass_proxy=bypass_proxy)
     if not client.health_check():
@@ -198,7 +198,7 @@ def _init_llm(
 
     # Register templates from profile (idempotent)
     if profile is None:
-        from knowledge_mining.mining.domain_pack import get_default_profile
+        from knowledge_mining.mining.infra.domain_pack import get_default_profile
         profile = get_default_profile()
     templates = build_templates_from_profile(profile)
     for tpl in templates:
@@ -212,7 +212,7 @@ def _init_llm(
 
     # v1.2: Try to create LlmEnricher if available
     try:
-        from knowledge_mining.mining.enrich import LlmEnricher
+        from knowledge_mining.mining.stages.enrich import LlmEnricher
         result["enricher"] = LlmEnricher(
             base_url=llm_base_url,
             fallback_enricher=RuleBasedEnricher(profile=profile),
@@ -224,7 +224,7 @@ def _init_llm(
 
     # v1.2: Create DiscourseRelationBuilder
     try:
-        from knowledge_mining.mining.relations import DiscourseRelationBuilder
+        from knowledge_mining.mining.stages.relations import DiscourseRelationBuilder
         result["discourse_relation_builder"] = DiscourseRelationBuilder(
             base_url=llm_base_url, bypass_proxy=bypass_proxy,
         )
@@ -233,7 +233,7 @@ def _init_llm(
 
     # v1.2: Create LLMContextualizer
     try:
-        from knowledge_mining.mining.retrieval_units import LLMContextualizer
+        from knowledge_mining.mining.stages.retrieval_units import LLMContextualizer
         result["contextualizer"] = LLMContextualizer(
             base_url=llm_base_url, bypass_proxy=bypass_proxy,
         )
@@ -253,7 +253,7 @@ def _init_embedding(
     if not api_key:
         return None
 
-    from knowledge_mining.mining.embedding import ZhipuEmbeddingGenerator
+    from knowledge_mining.mining.infra.embedding import ZhipuEmbeddingGenerator
     return ZhipuEmbeddingGenerator(
         api_key=api_key,
         model=model,
@@ -279,7 +279,7 @@ def _run_pipeline(
     tracker = RuntimeTracker(runtime_db)
     llm = llm_services or {}
     if profile is None:
-        from knowledge_mining.mining.domain_pack import get_default_profile
+        from knowledge_mining.mining.infra.domain_pack import get_default_profile
         profile = get_default_profile()
 
     now = _utcnow()

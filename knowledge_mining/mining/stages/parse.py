@@ -9,9 +9,29 @@ from __future__ import annotations
 
 from typing import Any, Protocol, runtime_checkable
 
-from knowledge_mining.mining.models import ContentBlock, SectionNode
-from knowledge_mining.mining.text_utils import token_count as _token_count
-from knowledge_mining.mining.structure import parse_structure as _parse_md_structure
+from knowledge_mining.mining.contracts.models import ContentBlock, SectionNode
+from knowledge_mining.mining.infra.text_utils import token_count as _token_count
+from knowledge_mining.mining.infra.structure import parse_structure as _parse_md_structure
+
+
+class ParserStage:
+    """Stage wrapper for the parser factory."""
+    stage_name = "parse"
+    stage_version = "1"
+
+    def __init__(self, **kwargs: Any) -> None:
+        self._kwargs = kwargs
+
+    def execute(self, context: dict[str, Any], **kw: Any) -> dict[str, Any]:
+        raw = context.get("raw_file")
+        if raw is None:
+            return context
+        parser = create_parser(raw.file_type, **self._kwargs)
+        if parser is None:
+            return context
+        tree = parser.parse(raw.content, raw.file_name, {})
+        context["tree"] = tree
+        return context
 
 
 @runtime_checkable

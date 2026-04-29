@@ -16,27 +16,19 @@ v1.2 can inject LLM-backed implementations without changing segmentation or retr
 from __future__ import annotations
 
 import re
-from typing import Any, Protocol, TYPE_CHECKING, runtime_checkable
+from typing import Any, TYPE_CHECKING
 
-from knowledge_mining.mining.models import VALID_SEMANTIC_ROLES, RawSegmentData
+from knowledge_mining.mining.contracts.models import VALID_SEMANTIC_ROLES, RawSegmentData
+from knowledge_mining.mining.contracts.protocols import Enricher, EntityExtractor, RoleClassifier
 
 if TYPE_CHECKING:
-    from knowledge_mining.mining.domain_pack import DomainProfile
+    from knowledge_mining.mining.infra.domain_pack import DomainProfile
 
-from knowledge_mining.mining.extractors import (
+from knowledge_mining.mining.infra.extractors import (
     DefaultRoleClassifier,
-    EntityExtractor,
     NoOpEntityExtractor,
-    RoleClassifier,
     RuleBasedEntityExtractor,
 )
-
-
-@runtime_checkable
-class Enricher(Protocol):
-    """Protocol for the enrich stage. v1.2 LLM implementation replaces this."""
-    def enrich(self, segments: list[RawSegmentData], **kwargs: Any) -> list[RawSegmentData]: ...
-    def enrich_batch(self, segments: list[RawSegmentData], **kwargs: Any) -> list[RawSegmentData]: ...
 
 
 class RuleBasedEnricher:
@@ -44,6 +36,9 @@ class RuleBasedEnricher:
 
     Profile-driven: entity types, role rules, heading roles come from DomainProfile.
     """
+
+    stage_name = "enrich"
+    stage_version = "1"
 
     def __init__(
         self,
@@ -65,7 +60,7 @@ class RuleBasedEnricher:
         from pathlib import Path
         import yaml
 
-        packs_root = Path(__file__).resolve().parent.parent.parent / "domain_packs"
+        packs_root = Path(__file__).resolve().parent.parent.parent.parent / "domain_packs"
         yaml_path = packs_root / profile.domain_id / "domain.yaml"
         if yaml_path.exists():
             with open(yaml_path, encoding="utf-8") as f:
@@ -122,6 +117,9 @@ class LlmEnricher:
     Submits segments for LLM understanding, falls back to rule-based on failure.
     """
 
+    stage_name = "enrich"
+    stage_version = "2"
+
     def __init__(
         self,
         *,
@@ -130,7 +128,7 @@ class LlmEnricher:
         bypass_proxy: bool = False,
         profile: DomainProfile | None = None,
     ) -> None:
-        from knowledge_mining.mining.llm_client import LlmClient
+        from knowledge_mining.mining.infra.llm_client import LlmClient
         self._client = LlmClient(base_url=base_url, bypass_proxy=bypass_proxy)
         self._profile = profile
         self._fallback = fallback_enricher or RuleBasedEnricher(profile=profile)

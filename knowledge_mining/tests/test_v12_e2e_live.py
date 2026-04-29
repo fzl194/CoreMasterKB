@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 from knowledge_mining.mining.jobs.run import run
-from knowledge_mining.mining.db import AssetCoreDB, MiningRuntimeDB
+from knowledge_mining.mining.infra.db import AssetCoreDB, MiningRuntimeDB
 
 
 def _row_to_dict(row: sqlite3.Row) -> dict:

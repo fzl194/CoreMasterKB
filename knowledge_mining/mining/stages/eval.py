@@ -16,6 +16,15 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
+class EvalStage:
+    """Stage wrapper for evaluation operations."""
+    stage_name = "eval"
+    stage_version = "1"
+
+    def execute(self, context: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
+        return context
+
+
 # ---------------------------------------------------------------------------
 # Data quality check result (v1.5)
 # ---------------------------------------------------------------------------
@@ -62,7 +71,7 @@ def run_data_quality_eval(
         asset_db_path: Path to asset_core.sqlite.
         golden_segment_hash: Golden regression segment hash.
     """
-    from knowledge_mining.mining.db import AssetCoreDB
+    from knowledge_mining.mining.infra.db import AssetCoreDB
 
     db = AssetCoreDB(asset_db_path)
     db.open()
@@ -70,22 +79,11 @@ def run_data_quality_eval(
     try:
         checks: list[QualityCheckResult] = []
 
-        # Check 1: no_qn_prefix — generated_question.title should not contain Qn prefix
         checks.append(_check_no_qn_prefix(db))
-
-        # Check 2: question_source_traceable — every generated_question has source_segment_id
         checks.append(_check_question_source_traceable(db))
-
-        # Check 3: llm_provenance — LLM task_id is traceable
         checks.append(_check_llm_provenance(db))
-
-        # Check 4: golden_regression — specific segment generates 0 questions
         checks.append(_check_golden_regression(db, golden_segment_hash))
-
-        # Check 5: toc_no_questions — navigation segments don't generate questions
         checks.append(_check_toc_no_questions(db))
-
-        # Check 6: entity_card_not_navigation — entity_card not from navigation segments
         checks.append(_check_entity_card_not_navigation(db))
 
         total = len(checks)
@@ -145,7 +143,7 @@ def _check_question_source_traceable(db: Any) -> QualityCheckResult:
         description="every generated_question has a source_segment_id",
         passed=len(violations) == 0,
         details=f"Checked {len(rows)} generated_question units",
-        violations=tuple(violations[:10]),  # cap at 10
+        violations=tuple(violations[:10]),
     )
 
 
@@ -182,7 +180,6 @@ def _check_llm_provenance(db: Any) -> QualityCheckResult:
 
 def _check_golden_regression(db: Any, segment_hash: str) -> QualityCheckResult:
     """Golden segment should generate 0 questions (known TOC/navigation content)."""
-    # Find segments with matching content_hash
     seg_rows = db._fetchall(
         "SELECT segment_key FROM asset_raw_segments "
         "WHERE content_hash = ?",
@@ -218,8 +215,6 @@ def _check_golden_regression(db: Any, segment_hash: str) -> QualityCheckResult:
 
 def _check_toc_no_questions(db: Any) -> QualityCheckResult:
     """Segments marked as navigation should not have generated questions."""
-    # Check segments with content_assessment.is_navigation = true in metadata
-    # SQLite JSON: json_extract
     rows = db._fetchall(
         "SELECT s.segment_key FROM asset_raw_segments s "
         "JOIN asset_retrieval_units u ON u.segment_key = s.segment_key "
@@ -266,7 +261,7 @@ class EvalResult:
     question_id: str
     question: str
     hit: bool
-    recall_rank: int | None  # rank of first hit (1-based), None if miss
+    recall_rank: int | None
     matched_entities: list[str] = field(default_factory=list)
     evidence_found: bool = False
 
@@ -288,21 +283,9 @@ def run_eval(
     *,
     k: int = 5,
 ) -> EvalReport:
-    """Run retrieval evaluation against a domain pack's eval_questions.
-
-    For each eval question, searches retrieval_units using keyword matching
-    and checks if expected entities/evidence appear in top-K results.
-
-    Args:
-        profile: DomainProfile with eval_questions.
-        asset_db_path: Path to asset_core.sqlite.
-        k: Number of top results to consider (default 5).
-
-    Returns:
-        EvalReport with Recall@K metrics.
-    """
-    from knowledge_mining.mining.db import AssetCoreDB
-    from knowledge_mining.mining.text_utils import tokenize_for_search
+    """Run retrieval evaluation against a domain pack's eval_questions."""
+    from knowledge_mining.mining.infra.db import AssetCoreDB
+    from knowledge_mining.mining.infra.text_utils import tokenize_for_search
 
     questions = profile.eval_questions
     if not questions:
@@ -348,7 +331,7 @@ def _evaluate_question(
     k: int = 5,
 ) -> EvalResult:
     """Evaluate a single question against retrieval units."""
-    from knowledge_mining.mining.text_utils import tokenize_for_search
+    from knowledge_mining.mining.infra.text_utils import tokenize_for_search
 
     search_tokens = tokenize_for_search(question.question)
     if not search_tokens:

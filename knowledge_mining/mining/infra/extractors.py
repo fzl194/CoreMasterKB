@@ -6,26 +6,10 @@ and entity_refs extraction. Future: replace with LLM-based classifiers.
 from __future__ import annotations
 
 import re
-from typing import Any, Protocol, TYPE_CHECKING, runtime_checkable
+from typing import Any, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from knowledge_mining.mining.domain_pack import DomainProfile
-
-
-@runtime_checkable
-class EntityExtractor(Protocol):
-    def extract(self, text: str, context: dict[str, Any]) -> list[dict[str, str]]: ...
-
-
-@runtime_checkable
-class RoleClassifier(Protocol):
-    def classify(
-        self,
-        text: str,
-        section_title: str | None,
-        block_type: str,
-        context: dict[str, Any],
-    ) -> str: ...
+    from knowledge_mining.mining.infra.domain_pack import DomainProfile
 
 
 # --- Lightweight rule-based implementations (profile-driven) ---
@@ -35,7 +19,7 @@ class RuleBasedEntityExtractor:
 
     def __init__(self, profile: DomainProfile | None = None) -> None:
         if profile is None:
-            from knowledge_mining.mining.domain_pack import get_default_profile
+            from knowledge_mining.mining.infra.domain_pack import get_default_profile
             profile = get_default_profile()
         self._profile = profile
         self._rules = profile.extractor_rules
@@ -50,7 +34,7 @@ class RuleBasedEntityExtractor:
         from pathlib import Path
         import yaml
 
-        packs_root = Path(__file__).resolve().parent.parent / "domain_packs"
+        packs_root = Path(__file__).resolve().parent.parent.parent / "domain_packs"
         yaml_path = packs_root / profile.domain_id / "domain.yaml"
         if yaml_path.exists():
             with open(yaml_path, encoding="utf-8") as f:
@@ -119,7 +103,7 @@ class DefaultRoleClassifier:
 
     def __init__(self, profile: DomainProfile | None = None) -> None:
         if profile is None:
-            from knowledge_mining.mining.domain_pack import get_default_profile
+            from knowledge_mining.mining.infra.domain_pack import get_default_profile
             profile = get_default_profile()
         self._rules = profile.role_keyword_rules
         self._parameter_column_names: list[str] = []
@@ -129,7 +113,7 @@ class DefaultRoleClassifier:
         from pathlib import Path
         import yaml
 
-        packs_root = Path(__file__).resolve().parent.parent / "domain_packs"
+        packs_root = Path(__file__).resolve().parent.parent.parent / "domain_packs"
         yaml_path = packs_root / profile.domain_id / "domain.yaml"
         if yaml_path.exists():
             with open(yaml_path, encoding="utf-8") as f:

@@ -10,7 +10,16 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-from knowledge_mining.mining.db import AssetCoreDB
+from knowledge_mining.mining.infra.db import AssetCoreDB
+
+
+class PublishingStage:
+    """Stage wrapper for publishing operations."""
+    stage_name = "publishing"
+    stage_version = "1"
+
+    def execute(self, context: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
+        return context
 
 
 def classify_documents(

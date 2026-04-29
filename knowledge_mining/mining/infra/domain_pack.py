@@ -23,7 +23,7 @@ import yaml
 logger = logging.getLogger(__name__)
 
 # Base directory for domain packs (sibling of mining/)
-_PACKS_ROOT = Path(__file__).resolve().parent.parent / "domain_packs"
+_PACKS_ROOT = Path(__file__).resolve().parent.parent.parent / "domain_packs"
 
 
 # ---------------------------------------------------------------------------

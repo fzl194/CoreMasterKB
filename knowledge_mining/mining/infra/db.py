@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .models import (
+from ..contracts.models import (
     MiningRunData,
     MiningRunDocumentData,
     StageEvent,
@@ -26,7 +26,7 @@ from .models import (
 # Paths
 # ---------------------------------------------------------------------------
 
-_REPO_ROOT = Path(__file__).resolve().parents[2]  # knowledge_mining/mining/ -> CoreMasterKB/
+_REPO_ROOT = Path(__file__).resolve().parents[3]  # knowledge_mining/mining/infra/ -> CoreMasterKB/
 _ASSET_CORE_DDL = _REPO_ROOT / "databases" / "asset_core" / "schemas" / "001_asset_core.sqlite.sql"
 _MINING_RUNTIME_DDL = _REPO_ROOT / "databases" / "mining_runtime" / "schemas" / "001_mining_runtime.sqlite.sql"
 

@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from knowledge_mining.mining.db import AssetCoreDB, MiningRuntimeDB
-from knowledge_mining.mining.models import MiningRunData
+from knowledge_mining.mining.infra.db import AssetCoreDB, MiningRuntimeDB
+from knowledge_mining.mining.contracts.models import MiningRunData
 from knowledge_mining.mining.runtime import RuntimeTracker
 
 

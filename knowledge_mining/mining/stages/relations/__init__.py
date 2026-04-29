@@ -21,13 +21,16 @@ import re
 import uuid
 from typing import Any
 
-from knowledge_mining.mining.models import RawSegmentData, SegmentRelationData
+from knowledge_mining.mining.contracts.models import RawSegmentData, SegmentRelationData
 
 logger = logging.getLogger(__name__)
 
 
 class DefaultRelationBuilder:
     """Default relation builder wrapping build_relations() for PipelineConfig."""
+
+    stage_name = "relations"
+    stage_version = "1"
 
     def build(
         self,
@@ -209,13 +212,16 @@ class DiscourseRelationBuilder:
     4. Results merged into the same asset_raw_segment_relations table
     """
 
+    stage_name = "discourse_relations"
+    stage_version = "1"
+
     def __init__(
         self,
         base_url: str = "http://localhost:8900",
         bypass_proxy: bool = False,
         window_size: int = 15,
     ) -> None:
-        from knowledge_mining.mining.llm_client import LlmClient
+        from knowledge_mining.mining.infra.llm_client import LlmClient
         self._client = LlmClient(base_url=base_url, bypass_proxy=bypass_proxy)
         self._window_size = window_size
 

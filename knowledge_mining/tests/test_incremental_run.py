@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from knowledge_mining.mining.db import AssetCoreDB, MiningRuntimeDB
+from knowledge_mining.mining.infra.db import AssetCoreDB, MiningRuntimeDB
 
 
 @pytest.fixture

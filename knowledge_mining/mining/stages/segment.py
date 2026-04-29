@@ -10,13 +10,16 @@ from __future__ import annotations
 
 from typing import Any
 
-from knowledge_mining.mining.models import ContentBlock, DocumentProfile, RawSegmentData, SectionNode
-from knowledge_mining.mining.hash_utils import content_hash, normalized_hash
-from knowledge_mining.mining.text_utils import token_count
+from knowledge_mining.mining.contracts.models import ContentBlock, DocumentProfile, RawSegmentData, SectionNode
+from knowledge_mining.mining.infra.hash_utils import content_hash, normalized_hash
+from knowledge_mining.mining.infra.text_utils import token_count
 
 
 class DefaultSegmenter:
     """Default segmenter wrapping segment_document() for PipelineConfig."""
+
+    stage_name = "segment"
+    stage_version = "1"
 
     def segment(
         self,

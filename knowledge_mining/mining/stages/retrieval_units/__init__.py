@@ -16,42 +16,17 @@ from __future__ import annotations
 import logging
 import re
 import uuid
-from typing import Any, Protocol, runtime_checkable
+from typing import Any
 
-from knowledge_mining.mining.models import RawSegmentData, RetrievalUnitData
-from knowledge_mining.mining.text_utils import tokenize_for_search
-from knowledge_mining.mining.domain_pack import DomainProfile, get_default_profile
+from knowledge_mining.mining.contracts.models import RawSegmentData, RetrievalUnitData
+from knowledge_mining.mining.contracts.protocols import QuestionGenerator, Contextualizer
+from knowledge_mining.mining.infra.text_utils import tokenize_for_search
+from knowledge_mining.mining.infra.domain_pack import DomainProfile, get_default_profile
 
 logger = logging.getLogger(__name__)
 
 # Default values — overridden by DomainProfile.retrieval_policy
 _DEFAULT_MAX_QUESTIONS_PER_SEGMENT = 2
-
-
-# ---------------------------------------------------------------------------
-# Protocols
-# ---------------------------------------------------------------------------
-
-@runtime_checkable
-class QuestionGenerator(Protocol):
-    """Protocol for generating retrieval questions from segments."""
-
-    def generate(self, segment: RawSegmentData) -> list[str]:
-        """Return list of generated questions for the segment."""
-        ...
-
-    def generate_batch(self, segments: list[RawSegmentData]) -> dict[str, list[str]]:
-        """Return {segment_key: [questions]} for all segments."""
-        ...
-
-
-@runtime_checkable
-class Contextualizer(Protocol):
-    """Protocol for generating contextual descriptions for segments."""
-
-    def contextualize(self, segments: list[RawSegmentData], document_text: str) -> dict[str, str]:
-        """Return {segment_key: context_description} for segments."""
-        ...
 
 
 # ---------------------------------------------------------------------------
@@ -76,7 +51,7 @@ class LlmQuestionGenerator:
     """
 
     def __init__(self, base_url: str = "http://localhost:8900", timeout: int = 120, bypass_proxy: bool = False, profile: DomainProfile | None = None) -> None:
-        from knowledge_mining.mining.llm_client import LlmClient
+        from knowledge_mining.mining.infra.llm_client import LlmClient
         self._client = LlmClient(base_url=base_url, bypass_proxy=bypass_proxy)
         self._timeout = timeout
         self._last_task_ids: dict[str, str] = {}
@@ -170,7 +145,7 @@ class LLMContextualizer:
     """
 
     def __init__(self, base_url: str = "http://localhost:8900", timeout: int = 120, bypass_proxy: bool = False) -> None:
-        from knowledge_mining.mining.llm_client import LlmClient
+        from knowledge_mining.mining.infra.llm_client import LlmClient
         self._client = LlmClient(base_url=base_url, bypass_proxy=bypass_proxy)
         self._timeout = timeout
         self._last_task_ids: dict[str, str] = {}
