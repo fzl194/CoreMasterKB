@@ -130,14 +130,20 @@ class TestLlmResultRefsJson:
 
     def test_db_roundtrip_source_refs(self):
         """Source refs with raw_segment_ids should survive DB roundtrip."""
-        import tempfile
         from knowledge_mining.mining.infra.db import AssetCoreDB
+        from knowledge_mining.mining.infra.pg_config import MiningDbConfig
+        from knowledge_mining.mining.infra.pg_schema import ensure_schema
+        from psycopg.rows import dict_row
+        from psycopg_pool import ConnectionPool
 
-        tmp = tempfile.mkdtemp()
+        cfg = MiningDbConfig()
+        ensure_schema(cfg)
+        pool = ConnectionPool(
+            cfg.conninfo, min_size=1, max_size=2, open=True,
+            kwargs={"row_factory": dict_row},
+        )
+        db = AssetCoreDB(pool)
         try:
-            db = AssetCoreDB(Path(tmp) / "test.sqlite")
-            db.open()
-
             db.upsert_snapshot("snap-1", "nh", "rh", "text/markdown")
             db.insert_retrieval_unit(
                 unit_id="ru-1",
@@ -157,8 +163,5 @@ class TestLlmResultRefsJson:
             assert len(units) == 1
             refs = json.loads(units[0]["source_refs_json"])
             assert refs["raw_segment_ids"] == ["seg-uuid-123"]
-
-            db.close()
         finally:
-            import shutil
-            shutil.rmtree(tmp)
+            db.close()

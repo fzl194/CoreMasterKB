@@ -1055,13 +1055,19 @@ class TestDBEmbeddingWrite:
 
     def test_insert_retrieval_embedding(self):
         from knowledge_mining.mining.infra.db import AssetCoreDB
-        import tempfile, os
+        from knowledge_mining.mining.infra.pg_config import MiningDbConfig
+        from knowledge_mining.mining.infra.pg_schema import ensure_schema
+        from psycopg.rows import dict_row
+        from psycopg_pool import ConnectionPool
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            db_path = os.path.join(tmpdir, "test.sqlite")
-            db = AssetCoreDB(db_path)
-            db.open()
-
+        cfg = MiningDbConfig()
+        ensure_schema(cfg)
+        pool = ConnectionPool(
+            cfg.conninfo, min_size=1, max_size=2, open=True,
+            kwargs={"row_factory": dict_row},
+        )
+        db = AssetCoreDB(pool)
+        try:
             # Create prerequisite data: batch -> document -> snapshot -> link -> segment -> retrieval unit
             db.upsert_source_batch("batch-1", "B-TEST", "folder_scan")
             doc_id = db.upsert_document("doc-1", "doc:/test.md", "test.md")
@@ -1084,12 +1090,12 @@ class TestDBEmbeddingWrite:
             db.commit()
 
             # Verify
-            row = db._fetchone("SELECT * FROM asset_retrieval_embeddings WHERE id = ?", ("emb-1",))
+            row = db._fetchone("SELECT * FROM asset_retrieval_embeddings WHERE id = %s", ("emb-1",))
             assert row is not None
             assert row["embedding_model"] == "embedding-3"
             assert row["embedding_dim"] == 3
             assert row["embedding_provider"] == "zhipu"
-
+        finally:
             db.close()
 
 

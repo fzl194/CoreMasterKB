@@ -5,7 +5,11 @@ No hardcoded defaults — missing env vars will raise an error.
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 from pydantic_settings import BaseSettings
+
+_REPO_ROOT = Path(__file__).resolve().parents[3]  # knowledge_mining/mining/infra/ -> CoreMasterKB/
 
 
 class MiningDbConfig(BaseSettings):
@@ -21,7 +25,12 @@ class MiningDbConfig(BaseSettings):
     pg_pool_min: int = 2
     pg_pool_max: int = 10
 
-    model_config = {"env_prefix": ""}  # reads PG_HOST, PG_PORT, ... directly
+    model_config = {
+        "env_prefix": "",
+        "env_file": str(_REPO_ROOT / ".env"),
+        "env_file_encoding": "utf-8",
+        "extra": "ignore",
+    }
 
     @property
     def conninfo(self) -> str:

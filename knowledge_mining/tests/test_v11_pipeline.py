@@ -48,20 +48,7 @@ def tmp_dir():
     shutil.rmtree(d)
 
 
-@pytest.fixture
-def asset_db(tmp_dir):
-    db = AssetCoreDB(tmp_dir / "asset_core.sqlite")
-    db.open()
-    yield db
-    db.close()
-
-
-@pytest.fixture
-def runtime_db(tmp_dir):
-    db = MiningRuntimeDB(tmp_dir / "mining_runtime.sqlite")
-    db.open()
-    yield db
-    db.close()
+# asset_db and runtime_db fixtures are provided by conftest.py (PostgreSQL)
 
 
 @pytest.fixture
@@ -476,14 +463,26 @@ class TestPublishing:
 # T14: End-to-End Pipeline
 # ===================================================================
 
+def _make_db(cls):
+    """Create a PG-backed database adapter for testing."""
+    from knowledge_mining.mining.infra.pg_config import MiningDbConfig
+    from knowledge_mining.mining.infra.pg_schema import ensure_schema
+    from psycopg.rows import dict_row
+    from psycopg_pool import ConnectionPool
+
+    cfg = MiningDbConfig()
+    ensure_schema(cfg)
+    pool = ConnectionPool(
+        cfg.conninfo, min_size=1, max_size=2, open=True,
+        kwargs={"row_factory": dict_row},
+    )
+    return cls(pool)
+
+
 class TestEndToEndPipeline:
     def test_full_pipeline(self, input_dir, tmp_dir):
         from knowledge_mining.mining.jobs.run import run
-        result = run(
-            str(input_dir),
-            asset_core_db_path=str(tmp_dir / "asset_core.sqlite"),
-            mining_runtime_db_path=str(tmp_dir / "mining_runtime.sqlite"),
-        )
+        result = run(str(input_dir))
         assert result["status"] == "completed"
         assert result["committed_count"] == 2
         assert result["build_id"] is not None
@@ -491,26 +490,16 @@ class TestEndToEndPipeline:
 
     def test_phase1_only(self, input_dir, tmp_dir):
         from knowledge_mining.mining.jobs.run import run
-        result = run(
-            str(input_dir),
-            asset_core_db_path=str(tmp_dir / "asset_core.sqlite"),
-            mining_runtime_db_path=str(tmp_dir / "mining_runtime.sqlite"),
-            phase1_only=True,
-        )
+        result = run(str(input_dir), phase1_only=True)
         assert result["status"] == "completed"
         assert result["build_id"] is None
         assert result["release_id"] is None
 
     def test_publish_after_phase1(self, input_dir, tmp_dir):
         from knowledge_mining.mining.jobs.run import run, publish
-        result = run(
-            str(input_dir),
-            asset_core_db_path=str(tmp_dir / "asset_core.sqlite"),
-            mining_runtime_db_path=str(tmp_dir / "mining_runtime.sqlite"),
-        )
+        result = run(str(input_dir))
         assert result["release_id"] is not None
-        db = AssetCoreDB(tmp_dir / "asset_core.sqlite")
-        db.open()
+        db = _make_db(AssetCoreDB)
         ar = db.get_active_release()
         assert ar is not None
         db.close()
@@ -518,13 +507,8 @@ class TestEndToEndPipeline:
     def test_stage_events_recorded(self, input_dir, tmp_dir):
         """Verify stage events are recorded for each document."""
         from knowledge_mining.mining.jobs.run import run
-        result = run(
-            str(input_dir),
-            asset_core_db_path=str(tmp_dir / "asset_core.sqlite"),
-            mining_runtime_db_path=str(tmp_dir / "mining_runtime.sqlite"),
-        )
-        rdb = MiningRuntimeDB(tmp_dir / "mining_runtime.sqlite")
-        rdb.open()
+        result = run(str(input_dir))
+        rdb = _make_db(MiningRuntimeDB)
         events = rdb.get_stage_events(result["run_id"])
         stages = {e["stage"] for e in events}
         assert "select_snapshot" in stages

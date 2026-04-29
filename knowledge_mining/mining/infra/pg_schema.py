@@ -35,15 +35,75 @@ def ensure_database(cfg: MiningDbConfig) -> None:
 
 
 def ensure_schema(cfg: MiningDbConfig) -> None:
-    """Ensure database exists, then execute both DDL files."""
+    """Ensure database exists, then execute both DDL files (idempotent)."""
     ensure_database(cfg)
 
     conn = psycopg.connect(cfg.conninfo, autocommit=True)
     try:
         for ddl_path in (_ASSET_DDL, _RUNTIME_DDL):
             ddl = ddl_path.read_text(encoding="utf-8")
-            with conn.cursor() as cur:
-                cur.execute(ddl)
+            # Execute statement-by-statement for idempotency
+            _execute_ddl(conn, ddl)
             logger.info("Applied DDL: %s", ddl_path.name)
     finally:
         conn.close()
+
+
+def _execute_ddl(conn, ddl: str) -> None:
+    """Execute DDL statement-by-statement, ignoring duplicate object errors.
+
+    Splits on semicolons but respects dollar-quoted strings ($$...$$)
+    used in PL/pgSQL function bodies.
+    """
+    import psycopg.errors
+
+    # Split respecting $$ quoting
+    stmts = _split_ddl(ddl)
+    for stmt in stmts:
+        stmt = stmt.strip()
+        if not stmt or stmt.startswith("--"):
+            continue
+        try:
+            with conn.cursor() as cur:
+                cur.execute(stmt)
+        except (
+            psycopg.errors.DuplicateObject,
+            psycopg.errors.DuplicateTable,
+            psycopg.errors.DuplicateFunction,
+        ):
+            pass  # Already exists — idempotent
+
+
+def _split_ddl(ddl: str) -> list[str]:
+    """Split DDL on semicolons, respecting $$ quoting."""
+    stmts: list[str] = []
+    current: list[str] = []
+    in_dollar_quote = False
+
+    i = 0
+    while i < len(ddl):
+        if ddl[i:i+2] == "$$" and not in_dollar_quote:
+            in_dollar_quote = True
+            current.append("$$")
+            i += 2
+        elif ddl[i:i+2] == "$$" and in_dollar_quote:
+            in_dollar_quote = False
+            current.append("$$")
+            i += 2
+        elif ddl[i] == ";" and not in_dollar_quote:
+            current.append(";")
+            stmt = "".join(current).strip()
+            if stmt:
+                stmts.append(stmt)
+            current = []
+            i += 1
+        else:
+            current.append(ddl[i])
+            i += 1
+
+    # Handle remaining text
+    remaining = "".join(current).strip()
+    if remaining:
+        stmts.append(remaining)
+
+    return stmts
