@@ -182,7 +182,7 @@ def _check_golden_regression(db: Any, segment_hash: str) -> QualityCheckResult:
     """Golden segment should generate 0 questions (known TOC/navigation content)."""
     seg_rows = db._fetchall(
         "SELECT segment_key FROM asset_raw_segments "
-        "WHERE content_hash = ?",
+        "WHERE content_hash = %s",
         (segment_hash,),
     )
     if not seg_rows:
@@ -194,7 +194,7 @@ def _check_golden_regression(db: Any, segment_hash: str) -> QualityCheckResult:
         )
 
     seg_keys = [row["segment_key"] for row in seg_rows]
-    placeholders = ",".join("?" * len(seg_keys))
+    placeholders = ",".join("%s" for _ in seg_keys)
     q_rows = db._fetchall(
         f"SELECT unit_key FROM asset_retrieval_units "
         f"WHERE segment_key IN ({placeholders}) "
@@ -342,13 +342,13 @@ def _evaluate_question(
             recall_rank=None,
         )
 
-    fts_query = " ".join(f'"{t}"' for t in search_tokens[:5])
+    fts_query = " & ".join(search_tokens[:5])
 
     rows = db._fetchall(
         "SELECT unit_key, text, search_text, entity_refs_json "
         "FROM asset_retrieval_units "
-        "WHERE asset_retrieval_units MATCH ? "
-        "ORDER BY weight DESC LIMIT ?",
+        "WHERE search_vector @@ plainto_tsquery('simple', %s) "
+        "ORDER BY weight DESC LIMIT %s",
         (fts_query, max(k, 10)),
     )
 

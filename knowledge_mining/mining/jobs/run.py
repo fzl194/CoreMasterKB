@@ -1,4 +1,4 @@
-"""v1.1 Mining pipeline orchestrator.
+"""v3.0 Mining pipeline orchestrator — PostgreSQL backend.
 
 Two entry points:
 - run(input_path, phase1_only=False): full or phase1-only pipeline
@@ -21,6 +21,8 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 from knowledge_mining.mining.infra.db import AssetCoreDB, MiningRuntimeDB
+from knowledge_mining.mining.infra.pg_config import MiningDbConfig
+from knowledge_mining.mining.infra.pg_schema import ensure_schema
 from knowledge_mining.mining.contracts.models import (
     BatchParams,
     DocumentProfile,
@@ -48,11 +50,28 @@ from knowledge_mining.mining.pipeline import (
 )
 
 
+def _create_dbs(cfg: MiningDbConfig | None = None) -> tuple[AssetCoreDB, MiningRuntimeDB]:
+    """Create and open PG-backed database adapters."""
+    if cfg is None:
+        cfg = MiningDbConfig()
+    ensure_schema(cfg)
+    from psycopg_pool import ConnectionPool
+    pool = ConnectionPool(
+        cfg.conninfo,
+        min_size=cfg.pg_pool_min,
+        max_size=cfg.pg_pool_max,
+        open=True,
+        kwargs={"row_factory": __import__("psycopg").rows.dict_row},
+    )
+    asset_db = AssetCoreDB(pool)
+    runtime_db = MiningRuntimeDB(pool)
+    return asset_db, runtime_db
+
+
 def run(
     input_path: str | Path,
     *,
-    asset_core_db_path: str | Path = "asset_core.sqlite",
-    mining_runtime_db_path: str | Path = "mining_runtime.sqlite",
+    db_config: MiningDbConfig | None = None,
     batch_params: BatchParams | None = None,
     phase1_only: bool = False,
     publish_on_partial_failure: bool = False,
@@ -69,19 +88,18 @@ def run(
 
     Args:
         input_path: Directory to scan for documents
-        asset_core_db_path: Path to asset_core.sqlite
-        mining_runtime_db_path: Path to mining_runtime.sqlite
+        db_config: PostgreSQL config (reads from .env if not provided)
         batch_params: Batch-level configuration
         phase1_only: If True, stop after document-level processing (no build/publish)
         publish_on_partial_failure: If True, publish even when some docs failed.
-            Default False: partial failures block active release, run marked "completed_with_errors".
         llm_base_url: LLM service URL (e.g. "http://localhost:8900"). None = no LLM.
-        llm_bypass_proxy: If True, bypass system proxy for LLM calls (for corporate networks).
+        llm_bypass_proxy: If True, bypass system proxy for LLM calls.
         embedding_api_key: Zhipu API key for Embedding-3. None = no embedding.
-        embedding_model: Embedding model name (default: embedding-3).
+        embedding_model: Embedding model name.
         embedding_base_url: Zhipu embedding API base URL.
         embedding_dimensions: Embedding vector dimensions.
-        domain_pack: Domain pack ID to load (default: "cloud_core_network").
+        domain_pack: Domain pack ID to load.
+        max_workers: Max concurrent workers for streaming pipeline.
 
     Returns:
         Summary dict with run_id, counts, and status.
@@ -93,11 +111,8 @@ def run(
     # Load domain profile
     profile = load_domain_pack(domain_pack)
 
-    # Open databases
-    asset_db = AssetCoreDB(asset_core_db_path)
-    runtime_db = MiningRuntimeDB(mining_runtime_db_path)
-    asset_db.open()
-    runtime_db.open()
+    # Open databases (PostgreSQL)
+    asset_db, runtime_db = _create_dbs(db_config)
 
     # Pre-generate run_id so we can fail_run on global exception
     run_id = uuid.uuid4().hex
@@ -117,11 +132,9 @@ def run(
             max_workers, profile,
         )
     except Exception as e:
-        # Mark run as failed
         try:
             tracker = RuntimeTracker(runtime_db)
             tracker.fail_run(run_id, error_summary=str(e)[:500])
-            runtime_db.commit()
         except Exception:
             pass
         raise
@@ -133,16 +146,12 @@ def run(
 def publish(
     run_id: str,
     *,
-    asset_core_db_path: str | Path = "asset_core.sqlite",
-    mining_runtime_db_path: str | Path = "mining_runtime.sqlite",
+    db_config: MiningDbConfig | None = None,
     channel: str = "default",
     released_by: str | None = None,
 ) -> dict[str, Any]:
     """Publish a completed run's build as an active release."""
-    asset_db = AssetCoreDB(asset_core_db_path)
-    runtime_db = MiningRuntimeDB(mining_runtime_db_path)
-    asset_db.open()
-    runtime_db.open()
+    asset_db, runtime_db = _create_dbs(db_config)
 
     try:
         run_data = runtime_db.get_run(run_id)
@@ -161,8 +170,6 @@ def publish(
             released_by=released_by,
             release_notes=f"Published from run {run_id}",
         )
-        runtime_db.commit()
-        asset_db.commit()
 
         return {"run_id": run_id, "build_id": build_id, "release_id": release_id}
     finally:
@@ -362,7 +369,7 @@ def _run_pipeline(
                 "SELECT ds.normalized_content_hash "
                 "FROM asset_document_snapshot_links dsl "
                 "JOIN asset_document_snapshots ds ON dsl.document_snapshot_id = ds.id "
-                "WHERE dsl.document_id = ? ORDER BY dsl.linked_at DESC LIMIT 1",
+                "WHERE dsl.document_id = %s ORDER BY dsl.linked_at DESC LIMIT 1",
                 (existing_doc["id"],),
             )
             if active_link and active_link["normalized_content_hash"] == doc.normalized_content_hash:
@@ -384,7 +391,7 @@ def _run_pipeline(
         if action == "SKIP" and existing_doc is not None:
             existing_link = asset_db._fetchone(
                 "SELECT document_snapshot_id FROM asset_document_snapshot_links "
-                "WHERE document_id = ? ORDER BY linked_at DESC LIMIT 1",
+                "WHERE document_id = %s ORDER BY linked_at DESC LIMIT 1",
                 (existing_doc["id"],),
             )
             if existing_link:
@@ -475,7 +482,7 @@ def _run_pipeline(
             if action == "UPDATE" and existing_doc is not None:
                 old_links = asset_db._fetchall(
                     "SELECT document_snapshot_id FROM asset_document_snapshot_links "
-                    "WHERE document_id = ? ORDER BY linked_at DESC",
+                    "WHERE document_id = %s ORDER BY linked_at DESC",
                     (existing_doc["id"],),
                 )
                 for old_link in old_links[1:] if len(old_links) > 1 else []:

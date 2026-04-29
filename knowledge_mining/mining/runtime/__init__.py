@@ -113,7 +113,7 @@ class RuntimeTracker:
         duration_ms = None
         run_document_id = None
         start_evt = self._db._fetchone(
-            "SELECT created_at, run_document_id FROM mining_run_stage_events WHERE id = ?", (event_id,)
+            "SELECT created_at, run_document_id FROM mining_run_stage_events WHERE id = %s", (event_id,)
         )
         if start_evt:
             if start_evt["created_at"]:
