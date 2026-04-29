@@ -100,7 +100,7 @@ async def run_e2e():
     await llm_client.ensure_templates()
 
     # Embedding generator
-    from knowledge_mining.mining.embedding import ZhipuEmbeddingGenerator
+    from knowledge_mining.mining.infra.embedding import ZhipuEmbeddingGenerator
     embedding_gen = ZhipuEmbeddingGenerator(
         api_key=os.environ.get("EMBEDDING_API_KEY", ""),
         model=os.environ.get("EMBEDDING_MODEL", "embedding-3"),
@@ -133,7 +133,7 @@ async def run_e2e():
     from agent_serving.serving.application.query_understanding import QueryUnderstandingEngine
     from agent_serving.serving.application.retrieval_router import RetrievalRouter
     from agent_serving.serving.pipeline.fusion import WeightedRRFFusion
-    from agent_serving.serving.schemas.models import QueryPlan, RetrievalBudget, ScoreChain
+    from agent_serving.serving.schemas.models import QueryPlan, RetrievalBudget, RetrievalQuery, ScoreChain
 
     bm25 = FTS5BM25Retriever(db)
     entity_retriever = EntityExactRetriever(db)
@@ -178,11 +178,10 @@ async def run_e2e():
         # Route 1: BM25
         report_lines.append("### Stage 3a: BM25 (FTS5) Retrieval\n")
         t0 = time.monotonic()
-        bm25_plan = QueryPlan(
+        bm25_plan = RetrievalQuery(
+            original_query=query,
             keywords=understanding.keywords,
             intent=understanding.intent,
-            desired_roles=understanding.evidence_need.preferred_roles if understanding.evidence_need else [],
-            budget=RetrievalBudget(),
         )
         bm25_results = await bm25.retrieve(bm25_plan, snapshot_ids)
         dt_bm25 = (time.monotonic() - t0) * 1000
@@ -206,7 +205,12 @@ async def run_e2e():
         # Route 2: Entity Exact
         report_lines.append("### Stage 3b: Entity Exact Retrieval\n")
         t0 = time.monotonic()
-        entity_results = await entity_retriever.retrieve_from_understanding(understanding, snapshot_ids)
+        entity_rq = RetrievalQuery(
+            original_query=query,
+            entities=understanding.entities,
+            keywords=understanding.keywords,
+        )
+        entity_results = await entity_retriever.retrieve(entity_rq, snapshot_ids)
         dt_entity = (time.monotonic() - t0) * 1000
         report_lines.append(f"- **耗时**: {dt_entity:.0f}ms")
         report_lines.append(f"- **召回数**: {len(entity_results)}")
@@ -233,7 +237,11 @@ async def run_e2e():
         report_lines.append(f"- **Embedding 耗时**: {dt_embed:.0f}ms, dim={len(query_vec)}")
 
         t0 = time.monotonic()
-        dense_results = await dense_retriever.retrieve_with_query(query_vec, snapshot_ids)
+        dense_rq = RetrievalQuery(
+            original_query=query,
+            query_embedding=query_vec,
+        )
+        dense_results = await dense_retriever.retrieve(dense_rq, snapshot_ids)
         dt_dense = (time.monotonic() - t0) * 1000
         report_lines.append(f"- **检索耗时**: {dt_dense:.0f}ms")
         report_lines.append(f"- **召回数**: {len(dense_results)}")

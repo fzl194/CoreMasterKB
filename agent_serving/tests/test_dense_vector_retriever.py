@@ -5,7 +5,7 @@ import pytest
 import pytest_asyncio
 import aiosqlite
 
-from agent_serving.serving.schemas.models import QueryPlan
+from agent_serving.serving.schemas.models import RetrievalQuery
 from agent_serving.serving.retrieval.dense_vector_retriever import (
     DenseVectorRetriever,
     _cosine_similarity_matrix,
@@ -58,7 +58,8 @@ class TestDenseVectorRetriever:
         retriever = DenseVectorRetriever(db_with_embeddings)
         query_vec = _make_embedding(8)
         snapshot_ids = ["aaaa0000-0000-0000-0000-000000000001"]
-        results = await retriever.retrieve_with_query(query_vec, snapshot_ids)
+        rq = RetrievalQuery(original_query="test", query_embedding=query_vec)
+        results = await retriever.retrieve(rq, snapshot_ids)
         assert len(results) > 0
         assert results[0].source == "dense_vector"
 
@@ -67,7 +68,8 @@ class TestDenseVectorRetriever:
         retriever = DenseVectorRetriever(db_with_embeddings)
         query_vec = _make_embedding(8)
         snapshot_ids = ["aaaa0000-0000-0000-0000-000000000001"]
-        results = await retriever.retrieve_with_query(query_vec, snapshot_ids)
+        rq = RetrievalQuery(original_query="test", query_embedding=query_vec)
+        results = await retriever.retrieve(rq, snapshot_ids)
         for r in results:
             assert r.score_chain is not None
             assert "dense_vector" in r.score_chain.route_sources
@@ -75,13 +77,22 @@ class TestDenseVectorRetriever:
     @pytest.mark.asyncio
     async def test_empty_query(self, db_with_embeddings):
         retriever = DenseVectorRetriever(db_with_embeddings)
-        results = await retriever.retrieve_with_query([], ["snap1"])
+        rq = RetrievalQuery(original_query="test", query_embedding=[])
+        results = await retriever.retrieve(rq, ["snap1"])
+        assert len(results) == 0
+
+    @pytest.mark.asyncio
+    async def test_no_embedding_auto_skip(self, db_with_embeddings):
+        retriever = DenseVectorRetriever(db_with_embeddings)
+        rq = RetrievalQuery(original_query="test")  # no query_embedding
+        results = await retriever.retrieve(rq, ["snap1"])
         assert len(results) == 0
 
     @pytest.mark.asyncio
     async def test_empty_snapshot(self, db_with_embeddings):
         retriever = DenseVectorRetriever(db_with_embeddings)
-        results = await retriever.retrieve_with_query([1.0] * 8, [])
+        rq = RetrievalQuery(original_query="test", query_embedding=[1.0] * 8)
+        results = await retriever.retrieve(rq, [])
         assert len(results) == 0
 
     @pytest.mark.asyncio

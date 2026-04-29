@@ -14,9 +14,8 @@ import pytest_asyncio
 import aiosqlite
 
 from agent_serving.serving.schemas.models import (
-    QueryPlan,
-    QueryUnderstanding,
     EntityRef,
+    RetrievalQuery,
 )
 from agent_serving.serving.retrieval.entity_exact_retriever import EntityExactRetriever
 from agent_serving.serving.repositories.schema_adapter import create_asset_tables_sqlite
@@ -39,12 +38,12 @@ class TestEntityCardContract:
     @pytest.mark.asyncio
     async def test_entity_card_retrieved_by_name(self, db_contract):
         retriever = EntityExactRetriever(db_contract)
-        understanding = QueryUnderstanding(
+        rq = RetrievalQuery(
             original_query="SMF",
             entities=[EntityRef(type="network_element", name="SMF")],
         )
         snapshot_ids = ["aaaa0000-0000-0000-0000-000000000003"]
-        results = await retriever.retrieve_from_understanding(understanding, snapshot_ids)
+        results = await retriever.retrieve(rq, snapshot_ids)
         entity_cards = [r for r in results if r.metadata.get("unit_type") == "entity_card"]
         assert len(entity_cards) > 0, "Should find entity_card for SMF"
         assert any("SMF" in r.metadata.get("text", "") for r in entity_cards)
@@ -56,9 +55,9 @@ class TestGeneratedQuestionContract:
     @pytest.mark.asyncio
     async def test_generated_question_retrieved(self, db_contract):
         retriever = EntityExactRetriever(db_contract)
-        plan = QueryPlan(keywords=["SMF"])
+        rq = RetrievalQuery(original_query="SMF", keywords=["SMF"])
         snapshot_ids = ["aaaa0000-0000-0000-0000-000000000003"]
-        results = await retriever.retrieve(plan, snapshot_ids)
+        results = await retriever.retrieve(rq, snapshot_ids)
         questions = [r for r in results if r.metadata.get("unit_type") == "generated_question"]
         assert len(questions) > 0, "Should find generated_question containing SMF"
 
@@ -69,9 +68,9 @@ class TestEntityRefsJsonContract:
     @pytest.mark.asyncio
     async def test_entity_refs_parsed(self, db_contract):
         retriever = EntityExactRetriever(db_contract)
-        plan = QueryPlan(keywords=["SMF"])
+        rq = RetrievalQuery(original_query="SMF", keywords=["SMF"])
         snapshot_ids = ["aaaa0000-0000-0000-0000-000000000003"]
-        results = await retriever.retrieve(plan, snapshot_ids)
+        results = await retriever.retrieve(rq, snapshot_ids)
         # At least some results should exist
         assert len(results) > 0, "Should find results for SMF"
         # Check that at least some have entity_refs_json
@@ -87,9 +86,9 @@ class TestSourceRefsJsonContract:
     @pytest.mark.asyncio
     async def test_source_refs_in_metadata(self, db_contract):
         retriever = EntityExactRetriever(db_contract)
-        plan = QueryPlan(keywords=["SMF"])
+        rq = RetrievalQuery(original_query="SMF", keywords=["SMF"])
         snapshot_ids = ["aaaa0000-0000-0000-0000-000000000003"]
-        results = await retriever.retrieve(plan, snapshot_ids)
+        results = await retriever.retrieve(rq, snapshot_ids)
         for r in results:
             refs_str = r.metadata.get("source_refs_json", "{}")
             refs = json.loads(refs_str)

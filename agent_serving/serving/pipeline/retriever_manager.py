@@ -14,6 +14,7 @@ from typing import Any
 from agent_serving.serving.schemas.models import (
     QueryPlan,
     RetrievalCandidate,
+    RetrievalQuery,
     RetrievalRoutePlan,
     ScoreChain,
 )
@@ -84,19 +85,20 @@ class RetrieverManager:
 
         async def _safe_retrieve(name: str, retriever: Retriever) -> list[RetrievalCandidate]:
             try:
-                # Use embedding-based retrieval for dense_vector if available
-                if (
-                    name == "dense_vector"
-                    and query_embedding is not None
-                    and hasattr(retriever, "retrieve_with_query")
-                ):
-                    top_k = 50
-                    if route_config and name in route_config:
-                        top_k = route_config[name].top_k
-                    return await retriever.retrieve_with_query(
-                        query_embedding, snapshot_ids, top_k,
-                    )
-                return await retriever.retrieve(plan, snapshot_ids)
+                top_k = 50
+                if route_config and name in route_config:
+                    top_k = route_config[name].top_k
+
+                # Build RetrievalQuery from QueryPlan fields
+                rq = RetrievalQuery(
+                    original_query="",
+                    keywords=plan.keywords,
+                    entities=plan.entity_constraints,
+                    query_embedding=query_embedding,
+                    intent=plan.intent,
+                    scope=plan.scope_constraints,
+                )
+                return await retriever.retrieve(rq, snapshot_ids, top_k=top_k)
             except asyncio.CancelledError:
                 raise
             except Exception:

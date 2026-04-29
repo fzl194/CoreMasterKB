@@ -15,10 +15,11 @@ from typing import Any
 
 import aiosqlite
 
+from agent_serving.serving.schemas.constants import ROUTE_ENTITY_EXACT
 from agent_serving.serving.schemas.models import (
-    QueryPlan,
-    QueryUnderstanding,
+    EntityRef,
     RetrievalCandidate,
+    RetrievalQuery,
     ScoreChain,
 )
 from agent_serving.serving.retrieval.retriever import Retriever
@@ -37,31 +38,19 @@ class EntityExactRetriever(Retriever):
 
     async def retrieve(
         self,
-        plan: QueryPlan,
-        snapshot_ids: list[str],
-    ) -> list[RetrievalCandidate]:
-        """Legacy interface: extract entities from plan keywords."""
-        if not snapshot_ids:
-            return []
-
-        # Extract entity names from plan keywords
-        entity_names = [kw for kw in plan.keywords if len(kw) >= 2]
-        if not entity_names:
-            return []
-
-        return await self._retrieve_by_entities(entity_names, snapshot_ids)
-
-    async def retrieve_from_understanding(
-        self,
-        understanding: QueryUnderstanding,
+        query: RetrievalQuery,
         snapshot_ids: list[str],
         top_k: int = 30,
     ) -> list[RetrievalCandidate]:
-        """New interface: use QueryUnderstanding entities."""
-        if not snapshot_ids or not understanding.entities:
+        """Unified interface: use query.entities (primary), fallback to query.keywords."""
+        if not snapshot_ids:
             return []
 
-        entity_names = [e.name for e in understanding.entities if e.name]
+        # Primary: entity names from query.entities
+        entity_names = [e.name for e in query.entities if e.name]
+        # Fallback: keywords as entity-like terms
+        if not entity_names:
+            entity_names = [kw for kw in query.keywords if len(kw) >= 2]
         if not entity_names:
             return []
 
@@ -128,7 +117,7 @@ class EntityExactRetriever(Retriever):
         params: list[Any] = [f"%{entity_name}%", *snapshot_ids]
         cursor = await self._db.execute(sql, params)
         rows = await cursor.fetchall()
-        return self._rows_to_candidates(rows, entity_name, source="entity_exact")
+        return self._rows_to_candidates(rows, entity_name, source=ROUTE_ENTITY_EXACT)
 
     async def _match_entity_refs(
         self,
@@ -157,7 +146,7 @@ class EntityExactRetriever(Retriever):
             entity_refs_str = r.get("entity_refs_json", "[]")
             if self._has_exact_entity(entity_refs_str, entity_name):
                 score = _EXACT_MATCH_SCORE if self._is_exact_name(entity_refs_str, entity_name) else _PARTIAL_MATCH_SCORE
-                candidates.append(self._row_to_candidate(r, score, "entity_exact"))
+                candidates.append(self._row_to_candidate(r, score, ROUTE_ENTITY_EXACT))
         return candidates
 
     async def _match_generated_questions(
@@ -179,7 +168,7 @@ class EntityExactRetriever(Retriever):
         params: list[Any] = [f"%{entity_name}%", *snapshot_ids]
         cursor = await self._db.execute(sql, params)
         rows = await cursor.fetchall()
-        return self._rows_to_candidates(rows, entity_name, source="entity_exact")
+        return self._rows_to_candidates(rows, entity_name, source=ROUTE_ENTITY_EXACT)
 
     def _has_exact_entity(self, entity_refs_json: str, name: str) -> bool:
         """Check if entity_refs contains an entity with matching name."""

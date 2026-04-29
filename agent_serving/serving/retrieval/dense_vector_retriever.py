@@ -14,10 +14,10 @@ from typing import Any
 
 import aiosqlite
 
+from agent_serving.serving.schemas.constants import ROUTE_DENSE_VECTOR
 from agent_serving.serving.schemas.models import (
-    QueryPlan,
-    QueryUnderstanding,
     RetrievalCandidate,
+    RetrievalQuery,
     ScoreChain,
 )
 from agent_serving.serving.retrieval.retriever import Retriever
@@ -75,22 +75,15 @@ class DenseVectorRetriever(Retriever):
 
     async def retrieve(
         self,
-        plan: QueryPlan,
-        snapshot_ids: list[str],
-    ) -> list[RetrievalCandidate]:
-        """Legacy interface: uses keywords as pseudo-query."""
-        if not snapshot_ids or not plan.keywords:
-            return []
-        return []
-
-    async def retrieve_with_query(
-        self,
-        query_embedding: list[float],
+        query: RetrievalQuery,
         snapshot_ids: list[str],
         top_k: int = 50,
     ) -> list[RetrievalCandidate]:
-        """Retrieve by query embedding vector."""
-        if not snapshot_ids or not query_embedding:
+        """Retrieve by query embedding vector.
+
+        If query.query_embedding is None, auto-skip (return []).
+        """
+        if not snapshot_ids or not query.query_embedding:
             return []
 
         # Load embeddings for given snapshots
@@ -100,7 +93,7 @@ class DenseVectorRetriever(Retriever):
 
         # Compute similarities
         matrix = [vec for _, vec in entries]
-        similarities = _cosine_similarity_matrix(query_embedding, matrix)
+        similarities = _cosine_similarity_matrix(query.query_embedding, matrix)
 
         # Build candidates and sort
         scored: list[tuple[float, str, int]] = []
@@ -121,11 +114,11 @@ class DenseVectorRetriever(Retriever):
             candidates.append(RetrievalCandidate(
                 retrieval_unit_id=ru_id,
                 score=max(score, 0.0),
-                source="dense_vector",
+                source=ROUTE_DENSE_VECTOR,
                 metadata=meta,
                 score_chain=ScoreChain(
                     raw_score=max(score, 0.0),
-                    route_sources=["dense_vector"],
+                    route_sources=[ROUTE_DENSE_VECTOR],
                 ),
             ))
         return candidates
