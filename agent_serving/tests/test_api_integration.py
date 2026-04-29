@@ -53,6 +53,15 @@ class TestSearchEndpoint:
         assert "relations" in pack
         assert "sources" in pack
         assert "issues" in pack
+        assert len(pack["items"]) > 0, f"Expected non-empty items for 'ADD APN', got {len(pack['items'])}"
+
+    @pytest.mark.asyncio
+    async def test_search_returns_nonempty_items(self, client):
+        """v1.3: API must return non-empty items for seeded data."""
+        resp = await client.post("/api/v1/search", json={"query": "ADD APN"})
+        assert resp.status_code == 200
+        pack = resp.json()
+        assert len(pack["items"]) > 0, f"Expected non-empty items, got {len(pack['items'])}"
 
     @pytest.mark.asyncio
     async def test_search_command_query(self, client):
