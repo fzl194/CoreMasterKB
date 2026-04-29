@@ -25,6 +25,7 @@ from agent_serving.serving.schemas.constants import (
     INTENT_GENERAL,
     INTENT_PROCEDURE,
     INTENT_TROUBLESHOOT,
+    LLM_INTENT_TO_INTERNAL,
 )
 
 logger = logging.getLogger(__name__)
@@ -92,6 +93,11 @@ def _is_cjk(char: str) -> bool:
 class QueryUnderstandingEngine:
     """LLM-first query understanding with rule-based fallback."""
 
+    @staticmethod
+    def _normalize_intent(raw_intent: str) -> str:
+        """Map any intent (LLM or rule) to internal taxonomy."""
+        return LLM_INTENT_TO_INTERNAL.get(raw_intent, INTENT_GENERAL)
+
     def __init__(self, llm_client: Any = None) -> None:
         self._llm = llm_client
 
@@ -146,7 +152,7 @@ class QueryUnderstandingEngine:
         evidence = parsed.get("evidence_need", {})
         return QueryUnderstanding(
             original_query=query,
-            intent=parsed.get("intent", INTENT_GENERAL),
+            intent=self._normalize_intent(parsed.get("intent", INTENT_GENERAL)),
             sub_queries=sub_queries,
             entities=entities,
             scope=parsed.get("scope", {}),
@@ -170,7 +176,7 @@ class QueryUnderstandingEngine:
 
         return QueryUnderstanding(
             original_query=query,
-            intent=intent,
+            intent=self._normalize_intent(intent),
             entities=entities,
             scope=scope,
             keywords=keywords,
