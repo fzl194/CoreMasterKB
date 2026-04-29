@@ -219,6 +219,14 @@ async def search(
     # 8. Rerank (cascading: Zhipu → LLM → Score)
     trace.start_stage("rerank")
     rerank_pipeline = _get_rerank_pipeline(request)
+    ranked, rerank_traces = await rerank_pipeline.rerank(
+        fused, route_plan, understanding,
+    )
+    rerank_method = "model" if rerank_pipeline._model_reranker else "score"
+    trace.end_stage("rerank", output_summary=f"ranked={len(ranked)}, method={rerank_method}")
+
+    # 9. Assemble ContextPack
+    trace.start_stage("assembly")
     legacy_plan = QueryPlan(
         intent=understanding.intent,
         keywords=understanding.keywords,
@@ -229,14 +237,6 @@ async def search(
         ),
         expansion=route_plan.expansion,
     )
-    ranked = await rerank_pipeline.rerank(
-        fused, legacy_plan, route_plan, understanding,
-    )
-    rerank_method = "model" if rerank_pipeline._model_reranker else "score"
-    trace.end_stage("rerank", output_summary=f"ranked={len(ranked)}, method={rerank_method}")
-
-    # 9. Assemble ContextPack
-    trace.start_stage("assembly")
     assembler = ContextAssembler(repo, expander)
     pack = await assembler.assemble(
         query=body.query,
@@ -262,6 +262,7 @@ async def search(
                 "fusion_method": fusion_method,
                 "query_embedding_dim": len(query_embedding) if query_embedding else 0,
                 "route_traces": [{"name": t.name, "attempted": t.attempted, "candidates": t.candidate_count, "skipped_reason": t.skipped_reason} for t in orch_result.route_traces],
+                "rerank_traces": [t.model_dump() for t in rerank_traces],
             },
         })
 

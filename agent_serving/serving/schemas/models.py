@@ -255,6 +255,17 @@ class ScoreChain(BaseModel):
     route_sources: list[str] = Field(default_factory=list)
 
 
+class RerankTraceStep(BaseModel):
+    """Records one step of the rerank cascade."""
+    provider: str = ""           # "model" | "llm" | "score"
+    attempted: bool = False
+    succeeded: bool = False
+    fallback_reason: str = ""
+    latency_ms: float = 0.0
+    count_before: int = 0
+    count_after: int = 0
+
+
 class TraceStage(BaseModel):
     name: str
     input_summary: str = ""
