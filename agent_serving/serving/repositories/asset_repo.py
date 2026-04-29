@@ -1,4 +1,4 @@
-"""Read-only repository for v1.1 asset_core tables.
+"""Read-only repository for asset_core tables — PostgreSQL async backend.
 
 Query path: active release → build → document snapshots → retrieval_units.
 source_refs_json is parsed for content-level drill-down, not passthrough.
@@ -10,7 +10,8 @@ import json
 import logging
 from typing import Any
 
-import aiosqlite
+import psycopg
+from psycopg.rows import dict_row
 
 from agent_serving.serving.schemas.models import ActiveScope, QueryPlan
 from agent_serving.serving.schemas.json_utils import parse_source_refs
@@ -19,9 +20,9 @@ logger = logging.getLogger(__name__)
 
 
 class AssetRepository:
-    """Read-only repo over asset_core SQLite."""
+    """Read-only repo over asset_core PostgreSQL tables."""
 
-    def __init__(self, db: aiosqlite.Connection) -> None:
+    def __init__(self, db: psycopg.AsyncConnection) -> None:
         self._db = db
 
     async def resolve_active_scope(self, channel: str = "default") -> ActiveScope:
@@ -33,7 +34,7 @@ class AssetRepository:
         """
         cursor = await self._db.execute(
             "SELECT id FROM asset_publish_releases "
-            "WHERE status = 'active' AND channel = ?",
+            "WHERE status = 'active' AND channel = %s",
             (channel,),
         )
         rows = await cursor.fetchall()
@@ -47,7 +48,7 @@ class AssetRepository:
 
         # Get build for this release
         cursor = await self._db.execute(
-            "SELECT build_id FROM asset_publish_releases WHERE id = ?",
+            "SELECT build_id FROM asset_publish_releases WHERE id = %s",
             (release_id,),
         )
         release_row = await cursor.fetchone()
@@ -57,7 +58,7 @@ class AssetRepository:
         cursor = await self._db.execute(
             "SELECT document_snapshot_id, document_id "
             "FROM asset_build_document_snapshots "
-            "WHERE build_id = ? AND selection_status = 'active'",
+            "WHERE build_id = %s AND selection_status = 'active'",
             (build_id,),
         )
         snapshot_rows = await cursor.fetchall()
@@ -81,20 +82,16 @@ class AssetRepository:
         segment_ids: list[str],
         snapshot_ids: list[str] | None = None,
     ) -> list[dict[str, Any]]:
-        """Fetch raw segments by ID list, constrained to active snapshots.
-
-        v1.2: Direct ID-based query (no JSON parsing needed).
-        Used by assembler when source_segment_id is available.
-        """
+        """Fetch raw segments by ID list, constrained to active snapshots."""
         if not segment_ids:
             return []
 
-        placeholders = ",".join("?" for _ in segment_ids)
+        placeholders = ",".join("%s" for _ in segment_ids)
         params: list[str] = list(segment_ids)
 
         snapshot_filter = ""
         if snapshot_ids:
-            snap_ph = ",".join("?" for _ in snapshot_ids)
+            snap_ph = ",".join("%s" for _ in snapshot_ids)
             snapshot_filter = f" AND rs.document_snapshot_id IN ({snap_ph})"
             params.extend(snapshot_ids)
 
@@ -127,22 +124,17 @@ class AssetRepository:
         source_refs_json: str | None,
         snapshot_ids: list[str] | None = None,
     ) -> list[dict[str, Any]]:
-        """Parse source_refs_json and fetch actual raw segments.
-
-        Only returns segments belonging to the active build's snapshots.
-        snapshot_ids: active scope snapshot IDs to filter by.
-        """
+        """Parse source_refs_json and fetch actual raw segments."""
         segment_ids = parse_source_refs(source_refs_json)
         if not segment_ids:
             return []
 
-        placeholders = ",".join("?" for _ in segment_ids)
+        placeholders = ",".join("%s" for _ in segment_ids)
         params: list[str] = list(segment_ids)
 
-        # Constrain to active build snapshots if provided
         snapshot_filter = ""
         if snapshot_ids:
-            snap_ph = ",".join("?" for _ in snapshot_ids)
+            snap_ph = ",".join("%s" for _ in snapshot_ids)
             snapshot_filter = f" AND rs.document_snapshot_id IN ({snap_ph})"
             params.extend(snapshot_ids)
 
@@ -179,12 +171,12 @@ class AssetRepository:
         if not segment_ids:
             return []
 
-        placeholders = ",".join("?" for _ in segment_ids)
+        placeholders = ",".join("%s" for _ in segment_ids)
         params: list[str] = list(segment_ids) + list(segment_ids)
 
         type_filter = ""
         if relation_types:
-            type_ph = ",".join("?" for _ in relation_types)
+            type_ph = ",".join("%s" for _ in relation_types)
             type_filter = f" AND rel.relation_type IN ({type_ph})"
             params.extend(relation_types)
 
@@ -207,19 +199,16 @@ class AssetRepository:
         document_ids: list[str],
         snapshot_ids: list[str] | None = None,
     ) -> list[dict[str, Any]]:
-        """Fetch document metadata for source attribution.
-
-        Only returns documents linked to the active build's snapshots.
-        """
+        """Fetch document metadata for source attribution."""
         if not document_ids:
             return []
 
-        placeholders = ",".join("?" for _ in document_ids)
+        placeholders = ",".join("%s" for _ in document_ids)
         params: list[str] = list(document_ids)
 
         snapshot_filter = ""
         if snapshot_ids:
-            snap_ph = ",".join("?" for _ in snapshot_ids)
+            snap_ph = ",".join("%s" for _ in snapshot_ids)
             snapshot_filter = f" AND dsl.document_snapshot_id IN ({snap_ph})"
             params.extend(snapshot_ids)
 

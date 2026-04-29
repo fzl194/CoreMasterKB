@@ -133,7 +133,7 @@ async def _generate_query_embedding(
             response = await llm_client.embed(
                 [query],
                 model=os.environ.get("EMBEDDING_MODEL", "embedding-3"),
-                dimensions=int(os.environ.get("EMBEDDING_DIMENSIONS", "2048")),
+                dimensions=int(os.environ.get("EMBEDDING_DIMENSIONS", "1024")),
             )
             if response and response.get("data"):
                 return response["data"][0]["embedding"]

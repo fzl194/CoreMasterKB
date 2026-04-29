@@ -9,7 +9,7 @@ import json
 import logging
 from typing import Any
 
-import aiosqlite
+import psycopg
 
 from agent_serving.serving.schemas.json_utils import (
     parse_source_refs,
@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 class GraphExpander:
     """BFS graph expander for raw segment relations."""
 
-    def __init__(self, db: aiosqlite.Connection) -> None:
+    def __init__(self, db: psycopg.AsyncConnection) -> None:
         self._db = db
 
     async def expand(
@@ -97,12 +97,12 @@ class GraphExpander:
         segment_ids = [e["segment_id"] for e in expansions]
         expansion_map = {e["segment_id"]: e for e in expansions}
 
-        placeholders = ",".join("?" for _ in segment_ids)
+        placeholders = ",".join("%s" for _ in segment_ids)
         params: list[str] = list(segment_ids)
 
         snapshot_filter = ""
         if snapshot_ids:
-            snap_ph = ",".join("?" for _ in snapshot_ids)
+            snap_ph = ",".join("%s" for _ in snapshot_ids)
             snapshot_filter = f" AND rs.document_snapshot_id IN ({snap_ph})"
             params.extend(snapshot_ids)
 
@@ -154,12 +154,12 @@ class GraphExpander:
         if not segment_ids:
             return []
 
-        placeholders = ",".join("?" for _ in segment_ids)
+        placeholders = ",".join("%s" for _ in segment_ids)
         type_filter = ""
         params: list[str] = list(segment_ids)
 
         if relation_types:
-            type_placeholders = ",".join("?" for _ in relation_types)
+            type_placeholders = ",".join("%s" for _ in relation_types)
             type_filter = f" AND rel.relation_type IN ({type_placeholders})"
             params.extend(relation_types)
 
@@ -167,7 +167,7 @@ class GraphExpander:
         snapshot_join = ""
         snapshot_filter = ""
         if snapshot_ids:
-            snap_ph = ",".join("?" for _ in snapshot_ids)
+            snap_ph = ",".join("%s" for _ in snapshot_ids)
             snapshot_join = (
                 " JOIN asset_raw_segments rs_src ON rel.source_segment_id = rs_src.id"
                 " JOIN asset_raw_segments rs_tgt ON rel.target_segment_id = rs_tgt.id"

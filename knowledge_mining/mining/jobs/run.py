@@ -80,7 +80,7 @@ def run(
     embedding_api_key: str | None = None,
     embedding_model: str = "embedding-3",
     embedding_base_url: str = "https://open.bigmodel.cn/api/paas/v4",
-    embedding_dimensions: int = 2048,
+    embedding_dimensions: int = 1024,
     max_workers: int = 4,
     domain_pack: str = "cloud_core_network",
 ) -> dict[str, Any]:
@@ -255,7 +255,7 @@ def _init_embedding(
     api_key: str | None,
     model: str = "embedding-3",
     base_url: str = "https://open.bigmodel.cn/api/paas/v4",
-    dimensions: int = 2048,
+    dimensions: int = 1024,
 ) -> Any | None:
     """Prefer shared llm_service embedding endpoint, fallback to direct Zhipu client."""
     if llm_base_url:

@@ -49,7 +49,7 @@ class ZhipuEmbeddingGenerator:
         *,
         model: str = "embedding-3",
         base_url: str = "https://open.bigmodel.cn/api/paas/v4",
-        dimensions: int = 2048,
+        dimensions: int = 1024,
         timeout: int = 60,
     ) -> None:
         self._api_key = api_key
@@ -135,7 +135,7 @@ class LLMServiceEmbeddingGenerator:
         *,
         base_url: str = "http://localhost:8900",
         model: str = "embedding-3",
-        dimensions: int = 2048,
+        dimensions: int = 1024,
         timeout: int = 60,
     ) -> None:
         self._base_url = base_url.rstrip("/")

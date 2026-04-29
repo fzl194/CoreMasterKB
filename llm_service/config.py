@@ -18,7 +18,7 @@ class LLMServiceConfig(BaseSettings):
     embedding_base_url: str = "https://open.bigmodel.cn/api/paas/v4"
     embedding_api_key: str = ""
     embedding_model: str = "embedding-3"
-    embedding_dimensions: int = 2048
+    embedding_dimensions: int = 1024
     rerank_base_url: str = "https://open.bigmodel.cn/api/paas/v4"
     rerank_api_key: str = ""
     rerank_model: str = "rerank"

@@ -7,6 +7,7 @@
 -- - Auto-increment triggers replaced by pg_trgm + tsvector
 
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
+CREATE EXTENSION IF NOT EXISTS vector;
 
 CREATE TABLE IF NOT EXISTS asset_source_batches (
     id            TEXT PRIMARY KEY,
@@ -230,6 +231,7 @@ CREATE TABLE IF NOT EXISTS asset_retrieval_embeddings (
     text_kind          TEXT NOT NULL,
     embedding_dim      INTEGER NOT NULL CHECK (embedding_dim > 0),
     embedding_vector   TEXT NOT NULL,
+    embedding_vector_vec vector(1024),
     content_hash       TEXT NOT NULL,
     created_at         TEXT NOT NULL,
     metadata_json      JSONB NOT NULL DEFAULT '{}'::jsonb
@@ -237,6 +239,10 @@ CREATE TABLE IF NOT EXISTS asset_retrieval_embeddings (
 
 CREATE INDEX IF NOT EXISTS idx_asset_retrieval_embeddings_unit
     ON asset_retrieval_embeddings(retrieval_unit_id);
+
+-- HNSW index for native cosine similarity search
+CREATE INDEX IF NOT EXISTS idx_asset_retrieval_embeddings_vec_hnsw
+    ON asset_retrieval_embeddings USING hnsw (embedding_vector_vec vector_cosine_ops);
 
 CREATE TABLE IF NOT EXISTS asset_builds (
     id               TEXT PRIMARY KEY,
@@ -311,3 +317,21 @@ $$ LANGUAGE plpgsql;
 CREATE TRIGGER trg_asset_retrieval_units_search_vector
     BEFORE INSERT OR UPDATE OF title, text, search_text ON asset_retrieval_units
     FOR EACH ROW EXECUTE FUNCTION asset_retrieval_units_search_vector_update();
+
+-- Function to auto-populate vector column from embedding_vector JSON TEXT
+CREATE OR REPLACE FUNCTION populate_embedding_vector_vec() RETURNS trigger AS $$
+BEGIN
+    IF NEW.embedding_vector IS NOT NULL AND NEW.embedding_vector != '' THEN
+        BEGIN
+            NEW.embedding_vector_vec := NEW.embedding_vector::jsonb::text::vector;
+        EXCEPTION WHEN OTHERS THEN
+            NEW.embedding_vector_vec := NULL;
+        END;
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_populate_embedding_vector
+    BEFORE INSERT OR UPDATE OF embedding_vector ON asset_retrieval_embeddings
+    FOR EACH ROW EXECUTE FUNCTION populate_embedding_vector_vec();

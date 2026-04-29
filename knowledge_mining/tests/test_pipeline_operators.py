@@ -596,7 +596,7 @@ class TestZhipuEmbeddingGenerator:
         from knowledge_mining.mining.infra.embedding import ZhipuEmbeddingGenerator
         from unittest.mock import patch, MagicMock
 
-        gen = ZhipuEmbeddingGenerator(api_key="test-key", dimensions=2048)
+        gen = ZhipuEmbeddingGenerator(api_key="test-key", dimensions=1024)
 
         mock_response = MagicMock()
         mock_response.json.return_value = {

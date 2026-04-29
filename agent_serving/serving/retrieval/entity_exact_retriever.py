@@ -13,7 +13,7 @@ import json
 import logging
 from typing import Any
 
-import aiosqlite
+import psycopg
 
 from agent_serving.serving.schemas.constants import ROUTE_ENTITY_EXACT
 from agent_serving.serving.schemas.models import (
@@ -33,7 +33,7 @@ _PARTIAL_MATCH_SCORE = 0.7
 class EntityExactRetriever(Retriever):
     """Retrieves candidates by matching entity names in retrieval units."""
 
-    def __init__(self, db: aiosqlite.Connection) -> None:
+    def __init__(self, db: psycopg.AsyncConnection) -> None:
         self._db = db
 
     async def retrieve(
@@ -65,7 +65,7 @@ class EntityExactRetriever(Retriever):
         """Core retrieval: match entity names across multiple strategies."""
         all_candidates: list[RetrievalCandidate] = []
 
-        placeholders = ",".join("?" for _ in snapshot_ids)
+        placeholders = ",".join("%s" for _ in snapshot_ids)
         seen_ids: set[str] = set()
 
         for name in entity_names:
@@ -111,7 +111,7 @@ class EntityExactRetriever(Retriever):
                    target_type, target_ref_json, unit_type, source_segment_id
             FROM asset_retrieval_units
             WHERE unit_type = 'entity_card'
-              AND text LIKE ?
+              AND text LIKE %s
               AND document_snapshot_id IN ({placeholders})
         """
         params: list[Any] = [f"%{entity_name}%", *snapshot_ids]
@@ -132,7 +132,7 @@ class EntityExactRetriever(Retriever):
                    entity_refs_json, target_type, target_ref_json,
                    unit_type, source_segment_id
             FROM asset_retrieval_units
-            WHERE entity_refs_json LIKE ?
+            WHERE entity_refs_json::text LIKE %s
               AND document_snapshot_id IN ({placeholders})
         """
         params: list[Any] = [f"%{entity_name}%", *snapshot_ids]
@@ -162,7 +162,7 @@ class EntityExactRetriever(Retriever):
                    target_type, target_ref_json, unit_type, source_segment_id
             FROM asset_retrieval_units
             WHERE unit_type = 'generated_question'
-              AND text LIKE ?
+              AND text LIKE %s
               AND document_snapshot_id IN ({placeholders})
         """
         params: list[Any] = [f"%{entity_name}%", *snapshot_ids]

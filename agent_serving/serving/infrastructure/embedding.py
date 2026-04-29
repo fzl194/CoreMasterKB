@@ -27,7 +27,7 @@ class EmbeddingGenerator:
         *,
         model: str = "embedding-3",
         base_url: str = "https://open.bigmodel.cn/api/paas/v4",
-        dimensions: int = 2048,
+        dimensions: int = 1024,
         timeout: int = 60,
     ) -> None:
         self._api_key = api_key

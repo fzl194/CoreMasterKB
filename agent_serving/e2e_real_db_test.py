@@ -43,7 +43,7 @@ async def run_e2e():
     report_lines.append(f"> 生成时间: {_ts()}")
     report_lines.append(f"> 数据库: `{DB_PATH}`")
     report_lines.append(f"> LLM 服务: `localhost:8900`")
-    report_lines.append(f"> Embedding: Zhipu embedding-3 (2048维)")
+    report_lines.append(f"> Embedding: Zhipu embedding-3 (1024维)")
     report_lines.append(f"> Rerank: Zhipu rerank\n")
     report_lines.append("---\n")
 
@@ -60,7 +60,7 @@ async def run_e2e():
     report_lines.append(f"| 指标 | 值 |")
     report_lines.append(f"|------|-----|")
     report_lines.append(f"| Retrieval Units | {ru_count} |")
-    report_lines.append(f"| Embeddings (2048维) | {emb_count} |")
+    report_lines.append(f"| Embeddings (1024维) | {emb_count} |")
     report_lines.append(f"| 带实体引用的 RU | {entity_count} |")
     report_lines.append("")
 
@@ -105,7 +105,7 @@ async def run_e2e():
         api_key=os.environ.get("EMBEDDING_API_KEY", ""),
         model=os.environ.get("EMBEDDING_MODEL", "embedding-3"),
         base_url=os.environ.get("EMBEDDING_BASE_URL", "https://open.bigmodel.cn/api/paas/v4"),
-        dimensions=int(os.environ.get("EMBEDDING_DIMENSIONS", "2048")),
+        dimensions=int(os.environ.get("EMBEDDING_DIMENSIONS", "1024")),
     )
 
     # Reranker
@@ -325,7 +325,7 @@ async def run_e2e():
     report_lines.append(f"- **三路召回**: BM25 + Entity Exact + Dense Vector ✅")
     report_lines.append(f"- **融合算法**: Weighted RRF ✅")
     report_lines.append(f"- **Rerank**: Zhipu Model Reranker (第一优先) ✅")
-    report_lines.append(f"- **Embedding**: Zhipu embedding-3, 2048维, 真实 API 调用 ✅")
+    report_lines.append(f"- **Embedding**: Zhipu embedding-3, 1024维, 真实 API 调用 ✅")
     report_lines.append("")
 
     await db.close()

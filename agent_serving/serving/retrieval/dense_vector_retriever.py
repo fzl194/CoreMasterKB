@@ -3,7 +3,7 @@
 Loads embedding vectors from asset_retrieval_embeddings table, computes
 cosine similarity against query embedding, returns top-K candidates.
 
-Uses numpy for matrix operations (~75ms for 50k vectors at 2048 dims).
+Uses numpy for matrix operations (~75ms for 50k vectors at 1024 dims).
 Zero external vector DB dependency; can be swapped to sqlite-vec later.
 """
 from __future__ import annotations
@@ -12,7 +12,7 @@ import json
 import logging
 from typing import Any
 
-import aiosqlite
+import psycopg
 
 from agent_serving.serving.schemas.constants import ROUTE_DENSE_VECTOR
 from agent_serving.serving.schemas.models import (
@@ -69,7 +69,7 @@ def _cosine_similarity_pure(
 class DenseVectorRetriever(Retriever):
     """Dense vector retrieval using brute-force cosine similarity."""
 
-    def __init__(self, db: aiosqlite.Connection) -> None:
+    def __init__(self, db: psycopg.AsyncConnection) -> None:
         self._db = db
         self._cache: dict[str, list[tuple[str, list[float]]]] = {}
 
@@ -132,7 +132,7 @@ class DenseVectorRetriever(Retriever):
         if cache_key in self._cache:
             return [(k, v) for k, v in self._cache[cache_key]]
 
-        placeholders = ",".join("?" for _ in snapshot_ids)
+        placeholders = ",".join("%s" for _ in snapshot_ids)
         sql = f"""
             SELECT e.retrieval_unit_id, e.embedding_vector
             FROM asset_retrieval_embeddings e
@@ -163,7 +163,7 @@ class DenseVectorRetriever(Retriever):
         """Fetch retrieval unit metadata for candidate building."""
         if not retrieval_unit_ids:
             return {}
-        placeholders = ",".join("?" for _ in retrieval_unit_ids)
+        placeholders = ",".join("%s" for _ in retrieval_unit_ids)
         sql = f"""
             SELECT id, document_snapshot_id, text, title, block_type,
                    semantic_role, source_refs_json, facets_json,
