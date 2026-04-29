@@ -657,16 +657,27 @@ def _run_pipeline(
     elif failed_count > 0:
         run_metadata = {"has_failures": True, "failed_count": failed_count}
 
-    tracker.complete_run(
-        run_id,
-        build_id=build_id,
-        committed_count=committed_count,
-        failed_count=failed_count,
-        skipped_count=skipped_count,
-        new_count=new_count,
-        updated_count=updated_count,
-        metadata_json=run_metadata,
-    )
+    if run_status == "failed":
+        tracker.fail_run(
+            run_id,
+            error_summary=f"All {failed_count} documents failed",
+            committed_count=committed_count,
+            failed_count=failed_count,
+            skipped_count=skipped_count,
+            new_count=new_count,
+            updated_count=updated_count,
+        )
+    else:
+        tracker.complete_run(
+            run_id,
+            build_id=build_id,
+            committed_count=committed_count,
+            failed_count=failed_count,
+            skipped_count=skipped_count,
+            new_count=new_count,
+            updated_count=updated_count,
+            metadata_json=run_metadata,
+        )
     runtime_db.commit()
 
     return {

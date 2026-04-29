@@ -44,6 +44,7 @@ class DocumentContext:
     seg_ids: dict[str, str] = field(default_factory=dict)
     retrieval_units: tuple[RetrievalUnitData, ...] = ()
     error: str | None = None
+    sequence_id: int = 0
 
     def with_updates(self, **kwargs: Any) -> DocumentContext:
         """Return a new DocumentContext with specified fields replaced."""
@@ -56,6 +57,7 @@ class DocumentContext:
             "seg_ids": self.seg_ids,
             "retrieval_units": self.retrieval_units,
             "error": self.error,
+            "sequence_id": self.sequence_id,
         }
         current.update(kwargs)
         return DocumentContext(**current)
@@ -247,10 +249,10 @@ class StreamingPipeline:
             self._threads.append(stage_threads)
 
     def process_all(self, items: list[DocumentContext]) -> list[DocumentContext]:
-        """Submit all items, wait for completion, return results in output order."""
+        """Submit all items, wait for completion, return results in input order."""
         n = len(items)
-        for item in items:
-            self._queues[0].put(item)
+        for i, item in enumerate(items):
+            self._queues[0].put(item.with_updates(sequence_id=i))
 
         # Send sentinels stage-by-stage to shut down workers
         for i, stage_threads in enumerate(self._threads):
@@ -262,6 +264,7 @@ class StreamingPipeline:
         results: list[DocumentContext] = []
         while len(results) < n:
             results.append(self._queues[-1].get())
+        results.sort(key=lambda ctx: ctx.sequence_id)
         return results
 
 
