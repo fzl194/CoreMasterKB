@@ -161,7 +161,9 @@ class TestLlmResultRefsJson:
 
             units = db.get_retrieval_units_by_snapshot("snap-1")
             assert len(units) == 1
-            refs = json.loads(units[0]["source_refs_json"])
+            refs = units[0]["source_refs_json"]
+            if isinstance(refs, str):
+                refs = json.loads(refs)
             assert refs["raw_segment_ids"] == ["seg-uuid-123"]
         finally:
             db.close()

@@ -176,7 +176,9 @@ class TestMiningRuntimeDB:
         r = runtime_db.get_run("r2")
         assert r["status"] == "completed"
         import json
-        meta = json.loads(r["metadata_json"])
+        meta = r["metadata_json"]
+        if isinstance(meta, str):
+            meta = json.loads(meta)
         assert meta["has_failures"] is True
         assert meta["failed_count"] == 2
 

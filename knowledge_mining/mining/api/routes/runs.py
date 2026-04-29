@@ -5,7 +5,7 @@ import logging
 import threading
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from knowledge_mining.mining.infra.pg_config import MiningDbConfig
@@ -13,6 +13,9 @@ from knowledge_mining.mining.infra.pg_config import MiningDbConfig
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/runs", tags=["runs"])
+
+# Mutex to prevent concurrent mining runs
+_run_lock = threading.Lock()
 
 
 # ── Request / Response models ──
@@ -52,7 +55,10 @@ async def create_run(body: CreateRunRequest, request: Request) -> dict:
     embedding_api_key = body.embedding_api_key or os.environ.get("EMBEDDING_API_KEY")
     llm_base_url = body.llm_base_url or os.environ.get("LLM_SERVICE_URL", "http://localhost:8900")
 
-    # Start run in background thread
+    # Prevent concurrent mining runs
+    if not _run_lock.acquire(blocking=False):
+        raise HTTPException(409, "A mining run is already in progress. Please wait for it to complete.")
+
     def _run_in_thread():
         try:
             from knowledge_mining.mining.jobs.run import run as mining_run
@@ -68,28 +74,30 @@ async def create_run(body: CreateRunRequest, request: Request) -> dict:
             )
         except Exception as e:
             logger.error("Mining run failed: %s", e, exc_info=True)
+        finally:
+            _run_lock.release()
 
     # Pre-create run to get run_id — but the actual run() creates its own.
     # We start the thread and query the run table after.
     thread = threading.Thread(target=_run_in_thread, daemon=True)
     thread.start()
 
-    # Wait briefly for the run to register in DB, then return latest run
+    # Poll for the run to appear in DB (up to 10s)
     import asyncio
-    await asyncio.sleep(1.0)
-
-    async with pool.connection() as conn:
-        cur = await conn.execute(
-            "SELECT id, status, started_at FROM mining_runs "
-            "ORDER BY started_at DESC LIMIT 1"
-        )
-        row = await cur.fetchone()
-        if row:
-            return {
-                "run_id": row["id"],
-                "status": row["status"],
-                "started_at": row["started_at"],
-            }
+    for _ in range(20):
+        await asyncio.sleep(0.5)
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                "SELECT id, status, started_at FROM mining_runs "
+                "ORDER BY started_at DESC LIMIT 1"
+            )
+            row = await cur.fetchone()
+            if row:
+                return {
+                    "run_id": row["id"],
+                    "status": row["status"],
+                    "started_at": row["started_at"],
+                }
 
     return {"run_id": "pending", "status": "starting"}
 
@@ -98,8 +106,8 @@ async def create_run(body: CreateRunRequest, request: Request) -> dict:
 async def list_runs(
     request: Request,
     status: str | None = None,
-    limit: int = 20,
-    offset: int = 0,
+    limit: int = Query(20, ge=1, le=500),
+    offset: int = Query(0, ge=0),
 ) -> dict:
     """List mining runs with optional status filter."""
     pool = request.app.state.pg_pool
@@ -138,7 +146,11 @@ async def get_run(run_id: str, request: Request) -> dict:
 
     async with pool.connection() as conn:
         cur = await conn.execute(
-            "SELECT * FROM mining_runs WHERE id = %s", [run_id]
+            "SELECT id, source_batch_id, input_path, status, build_id, "
+            "total_documents, new_count, updated_count, skipped_count, "
+            "failed_count, committed_count, started_at, finished_at, "
+            "error_summary, metadata_json "
+            "FROM mining_runs WHERE id = %s", [run_id]
         )
         run = await cur.fetchone()
         if not run:
@@ -153,10 +165,10 @@ async def get_run_stages(run_id: str, request: Request) -> dict:
 
     async with pool.connection() as conn:
         cur = await conn.execute(
-            "SELECT id, run_id, stage_name, status, started_at, finished_at, "
-            "output_summary, error_summary, run_document_id "
-            "FROM mining_stage_events WHERE run_id = %s "
-            "ORDER BY started_at",
+            "SELECT id, run_id, stage, status, created_at, duration_ms, "
+            "output_summary, error_message, run_document_id "
+            "FROM mining_run_stage_events WHERE run_id = %s "
+            "ORDER BY created_at",
             [run_id],
         )
         rows = await cur.fetchall()

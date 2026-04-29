@@ -1,7 +1,7 @@
 """Build & Release management routes."""
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 
 router = APIRouter(tags=["builds"])
 
@@ -10,8 +10,8 @@ router = APIRouter(tags=["builds"])
 async def list_builds(
     request: Request,
     status: str | None = None,
-    limit: int = 20,
-    offset: int = 0,
+    limit: int = Query(20, ge=1, le=500),
+    offset: int = Query(0, ge=0),
 ) -> dict:
     """List builds."""
     pool = request.app.state.pg_pool
@@ -49,7 +49,9 @@ async def get_build(build_id: str, request: Request) -> dict:
 
     async with pool.connection() as conn:
         cur = await conn.execute(
-            "SELECT * FROM asset_builds WHERE id = %s", [build_id]
+            "SELECT id, build_code, status, build_mode, source_batch_id, "
+            "parent_build_id, mining_run_id, created_at, finished_at "
+            "FROM asset_builds WHERE id = %s", [build_id]
         )
         build = await cur.fetchone()
         if not build:
@@ -69,8 +71,8 @@ async def get_build(build_id: str, request: Request) -> dict:
 @router.get("/api/releases")
 async def list_releases(
     request: Request,
-    limit: int = 20,
-    offset: int = 0,
+    limit: int = Query(20, ge=1, le=500),
+    offset: int = Query(0, ge=0),
 ) -> dict:
     """List releases."""
     pool = request.app.state.pg_pool
@@ -98,7 +100,9 @@ async def get_active_release(request: Request) -> dict:
 
     async with pool.connection() as conn:
         cur = await conn.execute(
-            "SELECT * FROM asset_publish_releases WHERE status = 'active' LIMIT 1"
+            "SELECT id, release_code, build_id, channel, status, "
+            "released_by, activated_at, deactivated_at "
+            "FROM asset_publish_releases WHERE status = 'active' LIMIT 1"
         )
         release = await cur.fetchone()
         if not release:

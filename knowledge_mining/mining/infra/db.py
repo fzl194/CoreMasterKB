@@ -741,7 +741,8 @@ class MiningRuntimeDB(_DB):
     def get_last_stage_status(self, run_id: str, run_document_id: str | None, stage: str) -> str | None:
         row = self._fetchone(
             """SELECT status FROM mining_run_stage_events
-               WHERE run_id = %s AND stage = %s AND (run_document_id = %s OR (%s IS NULL AND run_document_id IS NULL))
+               WHERE run_id = %s AND stage = %s
+               AND (run_document_id = %s OR (CAST(%s AS TEXT) IS NULL AND run_document_id IS NULL))
                ORDER BY created_at DESC LIMIT 1""",
             (run_id, stage, run_document_id, run_document_id),
         )

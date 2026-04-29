@@ -1,7 +1,7 @@
 """Knowledge asset read-only query routes."""
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 
 router = APIRouter(prefix="/api/knowledge", tags=["knowledge"])
 
@@ -51,8 +51,8 @@ async def knowledge_stats(request: Request) -> dict:
 async def list_documents(
     request: Request,
     type: str | None = None,
-    limit: int = 20,
-    offset: int = 0,
+    limit: int = Query(20, ge=1, le=500),
+    offset: int = Query(0, ge=0),
 ) -> dict:
     """List documents with optional type filter."""
     pool = request.app.state.pg_pool
@@ -89,7 +89,9 @@ async def get_document(document_id: str, request: Request) -> dict:
 
     async with pool.connection() as conn:
         cur = await conn.execute(
-            "SELECT * FROM asset_documents WHERE id = %s", [document_id]
+            "SELECT id, document_key, document_name, document_type, "
+            "source_uri, created_at "
+            "FROM asset_documents WHERE id = %s", [document_id]
         )
         doc = await cur.fetchone()
         if not doc:
@@ -113,8 +115,8 @@ async def get_document(document_id: str, request: Request) -> dict:
 async def get_document_segments(
     document_id: str,
     request: Request,
-    limit: int = 100,
-    offset: int = 0,
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
 ) -> dict:
     """Get segments for a document (via latest snapshot)."""
     pool = request.app.state.pg_pool
@@ -149,8 +151,8 @@ async def get_document_units(
     document_id: str,
     request: Request,
     unit_type: str | None = None,
-    limit: int = 100,
-    offset: int = 0,
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
 ) -> dict:
     """Get retrieval units for a document (via latest snapshot)."""
     pool = request.app.state.pg_pool
@@ -187,8 +189,8 @@ async def list_segments(
     request: Request,
     role: str | None = None,
     type: str | None = None,
-    limit: int = 50,
-    offset: int = 0,
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
 ) -> dict:
     """List segments across all documents."""
     pool = request.app.state.pg_pool
@@ -227,8 +229,8 @@ async def list_segments(
 async def list_units(
     request: Request,
     unit_type: str | None = None,
-    limit: int = 50,
-    offset: int = 0,
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
 ) -> dict:
     """List retrieval units across all documents."""
     pool = request.app.state.pg_pool
@@ -264,8 +266,8 @@ async def list_units(
 async def list_relations(
     request: Request,
     type: str | None = None,
-    limit: int = 50,
-    offset: int = 0,
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
 ) -> dict:
     """List segment relations."""
     pool = request.app.state.pg_pool

@@ -21,12 +21,14 @@ _RUNTIME_DDL = _REPO_ROOT / "databases" / "mining_runtime" / "schemas" / "002_mi
 
 def ensure_database(cfg: MiningDbConfig) -> None:
     """Create the target database if it doesn't exist (connects to postgres maintenance DB)."""
+    from psycopg import sql
+
     conn = psycopg.connect(cfg.maintenance_conninfo, autocommit=True)
     try:
         with conn.cursor() as cur:
             cur.execute("SELECT 1 FROM pg_database WHERE datname = %s", (cfg.pg_dbname,))
             if cur.fetchone() is None:
-                cur.execute(f'CREATE DATABASE {cfg.pg_dbname}')
+                cur.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(cfg.pg_dbname)))
                 logger.info("Created database %s", cfg.pg_dbname)
             else:
                 logger.info("Database %s already exists", cfg.pg_dbname)
